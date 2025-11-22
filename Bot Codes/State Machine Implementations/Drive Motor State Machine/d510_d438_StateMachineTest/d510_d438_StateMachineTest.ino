@@ -587,8 +587,10 @@ void ACTUATION_TASK(void* pvParameters) {
     if (drive_motor_set_speed != drive_motor_previous_set_speed) {
       if (drive_motor_set_speed != 0) {
         setTagetVelocity(drive_motor_set_speed);
+        add_log("Setting speed to " + String(drive_motor_set_speed));
       } else {
         haltMovement();
+        add_log("halting the bot");
       }
       drive_motor_previous_set_speed = drive_motor_set_speed;
     }
