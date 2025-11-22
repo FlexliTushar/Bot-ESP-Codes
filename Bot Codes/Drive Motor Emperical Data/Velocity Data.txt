@@ -1,0 +1,134 @@
+0.5 m/s Round 1 Unloaded
+2025-07-01 17:20:56:   b''
+2025-07-01 17:20:56:   b''
+2025-07-01 17:21:11:   b''
+2025-07-01 17:21:17:   b'B3 d346:  | Starting the bot @ 0.5m/s'
+2025-07-01 17:21:26:   b'B3 d346:  | Actual Speed: 0.501 | Computed Speed: 0.500 | Actual Speed: 0.505 | Computed Speed: 0.519 | Actual Speed: 0.507 | Computed Speed: 0.488 | Actual Speed: 0.503 | Computed Speed: 0.526 | Actual Speed: 0.505 | Computed Speed: 0.506 | Actual Speed: 0.501 | Computed Speed: 0.506 | Actual Speed: 0.501 | Computed Speed: 0.506 | Actual Speed: 0.501 | Computed Speed: 0.500 | Actual Speed: 0.497 | Computed Speed: 0.506 | Actual Speed: 0.496 | Computed Speed: 0.500 | Actual Speed: 0.497 | Computed Speed: 0.500 | Actual Speed: 0.494 | Computed Speed: 0.494 | Actual Speed: 0.496 | Computed Speed: 0.494 | Actual Speed: 0.497 | Computed Speed: 0.506 | Actual Speed: 0.496 | Computed Speed: 0.488 | Actual Speed: 0.496 | Computed Speed: 0.513 | Actual Speed: 0.497 | Computed Speed: 0.494 | Actual Speed: 0.497 | Computed Speed: 0.526 | Actual Speed: 0.501 | Computed Speed: 0.500'
+
+
+0.5 m/s Round 2 Unloaded
+2025-07-01 17:22:15:   b''
+2025-07-01 17:22:21:   b'B3 d346:  | Starting the bot @ 0.5m/s'
+2025-07-01 17:22:35:   b''
+2025-07-01 17:22:41:   b'B3 d346:  | Starting the bot @ 0.5m/s'
+2025-07-01 17:22:50:   b'B3 d346:  | Actual Speed: 0.503 | Computed Speed: 0.494 | Actual Speed: 0.503 | Computed Speed: 0.526 | Actual Speed: 0.505 | Computed Speed: 0.488 | Actual Speed: 0.503 | Computed Speed: 0.519 | Actual Speed: 0.501 | Computed Speed: 0.506 | Actual Speed: 0.499 | Computed Speed: 0.506 | Actual Speed: 0.499 | Computed Speed: 0.506 | Actual Speed: 0.499 | Computed Speed: 0.500 | Actual Speed: 0.497 | Computed Speed: 0.500 | Actual Speed: 0.496 | Computed Speed: 0.500 | Actual Speed: 0.494 | Computed Speed: 0.500 | Actual Speed: 0.494 | Computed Speed: 0.488 | Actual Speed: 0.494 | Computed Speed: 0.494 | Actual Speed: 0.494 | Computed Speed: 0.506 | Actual Speed: 0.496 | Computed Speed: 0.488 | Actual Speed: 0.496 | Computed Speed: 0.513 | Actual Speed: 0.497 | Computed Speed: 0.488 | Actual Speed: 0.499 | Computed Speed: 0.526 | Actual Speed: 0.497 | Computed Speed: 0.500'
+
+
+0.5 m/s Round 1 Loaded - 10 Kg
+2025-07-01 17:28:58:   b''
+2025-07-01 17:29:04:   b'B3 d346:  | Starting the bot @ 0.5m/s'
+2025-07-01 17:29:13:   b'B3 d346:  | Actual Speed: 0.507 | Computed Speed: 0.500 | Actual Speed: 0.505 | Computed Speed: 0.519 | Actual Speed: 0.505 | Computed Speed: 0.494 | Actual Speed: 0.505 | Computed Speed: 0.526 | Actual Speed: 0.505 | Computed Speed: 0.513 | Actual Speed: 0.503 | Computed Speed: 0.506 | Actual Speed: 0.509 | Computed Speed: 0.519 | Actual Speed: 0.503 | Computed Speed: 0.500 | Actual Speed: 0.499 | Computed Speed: 0.500 | Actual Speed: 0.497 | Computed Speed: 0.500 | Actual Speed: 0.496 | Computed Speed: 0.506 | Actual Speed: 0.496 | Computed Speed: 0.488 | Actual Speed: 0.496 | Computed Speed: 0.500 | Actual Speed: 0.497 | Computed Speed: 0.513 | Actual Speed: 0.499 | Computed Speed: 0.494 | Actual Speed: 0.499 | Computed Speed: 0.513 | Actual Speed: 0.497 | Computed Speed: 0.494 | Actual Speed: 0.499 | Computed Speed: 0.519 | Actual Speed: 0.499 | Computed Speed: 0.506'
+2025-07-01 17:31:20:   b''
+
+
+
+
+0.5 m/s Round 2 Loaded - 10 Kg
+2025-07-01 17:39:55:   b''
+2025-07-01 17:40:01:   b'B3 d346:  | Starting the bot @ 0.5m/s'
+2025-07-01 17:40:29:   b'B3 d346:  | Actual Speed: 0.509 | Computed Speed: 0.500 | Actual Speed: 0.509 | Computed Speed: 0.526 | Actual Speed: 0.510 | Computed Speed: 0.500 | Actual Speed: 0.509 | Computed Speed: 0.533 | Actual Speed: 0.510 | Computed Speed: 0.513 | Actual Speed: 0.507 | Computed Speed: 0.513 | Actual Speed: 0.000 | Computed Speed: 0.526 | Actual Speed: 0.507 | Computed Speed: 0.500 | Actual Speed: 0.501 | Computed Speed: 0.506 | Actual Speed: 0.503 | Computed Speed: 0.506 | Actual Speed: 0.501 | Computed Speed: 0.506 | Actual Speed: 0.499 | Computed Speed: 0.500 | Actual Speed: 0.501 | Computed Speed: 0.500 | Actual Speed: 0.501 | Computed Speed: 0.513 | Actual Speed: 0.503 | Computed Speed: 0.500 | Actual Speed: 0.503 | Computed Speed: 0.513 | Actual Speed: 0.501 | Computed Speed: 0.494 | Actual Speed: 0.503 | Computed Speed: 0.526 | Actual Speed: 0.505 | Computed Speed: 0.513'
+
+
+1 m/s Round 1 Loaded - 10 Kg
+2025-07-01 17:44:21:   b'B3 d346:  | Starting the bot @ 1m/s'
+2025-07-01 17:44:37:   b'B3 d346:  | Actual Speed: 1.015 | Computed Speed: 1.000 | Actual Speed: 1.010 | Computed Speed: 1.053 | Actual Speed: 1.006 | Computed Speed: 0.976 | Actual Speed: 1.013 | Computed Speed: 1.053 | Actual Speed: 1.012 | Computed Speed: 1.026 | Actual Speed: 1.006 | Computed Speed: 1.000 | Actual Speed: 1.013 | Computed Speed: 1.053 | Actual Speed: 1.019 | Computed Speed: 1.026 | Actual Speed: 1.012 | Computed Speed: 1.000 | Actual Speed: 1.010 | Computed Speed: 1.026 | Actual Speed: 1.010 | Computed Speed: 1.026 | Actual Speed: 1.002 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 0.976 | Actual Speed: 1.002 | Computed Speed: 1.053 | Actual Speed: 1.004 | Computed Speed: 1.000 | Actual Speed: 1.004 | Computed Speed: 1.026 | Actual Speed: 1.006 | Computed Speed: 0.976 | Actual Speed: 1.004 | Computed Speed: 1.053 | Actual Speed: 1.002 | Computed Speed: 1.000'
+2025-07-01 17:44:43:   b'B3 d346:  | Actual Speed: 1.004 | Computed Speed: 0.006 | Actual Speed: 1.000 | Computed Speed: 0.930 | Actual Speed: 1.006 | Computed Speed: 0.952 | Actual Speed: 1.002 | Computed Speed: 0.909 | Actual Speed: 1.002 | Computed Speed: 0.909 | Actual Speed: 1.008 | Computed Speed: 0.889 | Actual Speed: 1.008 | Computed Speed: 0.909 | Actual Speed: 1.004 | Computed Speed: 0.952 | Actual Speed: 1.004 | Computed Speed: 0.930 | Actual Speed: 1.000 | Computed Speed: 0.889 | Actual Speed: 1.000 | Computed Speed: 0.930 | Actual Speed: 1.004 | Computed Speed: 0.870 | Actual Speed: 1.000 | Computed Speed: 0.976 | Actual Speed: 0.999 | Computed Speed: 0.909 | Actual Speed: 0.999 | Computed Speed: 0.930 | Actual Speed: 0.997 | Computed Speed: 0.930 | Actual Speed: 0.000 | Computed Speed: 0.889 | Actual Speed: 0.999 | Computed Speed: 0.870 | Actual Speed: 0.999 | Computed Speed: 0.952 | Actual Speed: 1.002 | Computed Speed: 0.930 | Actual Speed: 0.999 | Computed Speed: 0.889 | Actual Speed: 0.999 | Computed Speed: 0.952 | Actual Speed: 0.999 | Computed Speed: 0.909 | Actual Speed: 0.997 | Computed Speed: 0.870 | Actual Speed: 1.004 | Computed Speed: 0.976 | Actual Speed: 1.004 | Computed Speed: 0.930 | Actual Speed: 1.000 | Computed Speed: 0.930 | Actual Speed: 0.993 | Computed Speed: 0.889 | Actual Speed: 1.000 | Computed Speed: 0.930'
+
+
+1 m/s Round 2 Loaded - 10 Kg
+2025-07-01 17:46:04:   b''
+2025-07-01 17:46:10:   b'B3 d346:  | Starting the bot @ 1m/s'
+2025-07-01 17:46:29:   b''
+2025-07-01 17:46:35:   b'B3 d346:  | Starting the bot @ 1m/s'
+2025-07-01 17:46:47:   b'B3 d346:  | Actual Speed: 1.013 | Computed Speed: 1.026 | Actual Speed: 1.006 | Computed Speed: 1.026 | Actual Speed: 1.004 | Computed Speed: 0.976 | Actual Speed: 1.012 | Computed Speed: 1.081 | Actual Speed: 1.012 | Computed Speed: 1.000 | Actual Speed: 1.008 | Computed Speed: 1.026 | Actual Speed: 1.013 | Computed Speed: 1.026 | Actual Speed: 1.017 | Computed Speed: 1.026 | Actual Speed: 1.008 | Computed Speed: 1.000 | Actual Speed: 1.006 | Computed Speed: 1.026 | Actual Speed: 1.006 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 1.000 | Actual Speed: 1.002 | Computed Speed: 1.000 | Actual Speed: 1.004 | Computed Speed: 1.053 | Actual Speed: 1.002 | Computed Speed: 0.976 | Actual Speed: 1.002 | Computed Speed: 1.026 | Actual Speed: 1.000 | Computed Speed: 0.976 | Actual Speed: 1.000 | Computed Speed: 1.053 | Actual Speed: 0.999 | Computed Speed: 1.000'
+
+
+2 m/s Round 1 Loaded - 10 Kg
+2025-07-01 17:49:44:   b''
+2025-07-01 17:49:50:   b'B3 d346:  | Starting the bot @ 2m/s | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.005 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.105 | Actual Speed: 2.008 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.105 | Actual Speed: 2.021 | Computed Speed: 2.000 | Actual Speed: 2.023 | Computed Speed: 2.000 | Actual Speed: 2.023 | Computed Speed: 2.105 | Actual Speed: 2.019 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.005 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.105 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.105 | Actual Speed: 2.016 | Computed Speed: 2.000'
+
+
+2 m/s Round 2 Loaded - 10 Kg
+2025-07-01 17:51:35:   b''
+2025-07-01 17:51:41:   b'B3 d346:  | Starting the bot @ 2m/s'
+2025-07-01 17:51:51:   b''
+2025-07-01 17:51:57:   b'B3 d346:  | Starting the bot @ 2m/s | Actual Speed: 2.005 | Computed Speed: 1.905 | Actual Speed: 2.005 | Computed Speed: 2.105 | Actual Speed: 2.006 | Computed Speed: 1.905 | Actual Speed: 2.010 | Computed Speed: 2.105 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.105 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.105 | Actual Speed: 2.021 | Computed Speed: 2.000 | Actual Speed: 2.023 | Computed Speed: 2.000 | Actual Speed: 2.021 | Computed Speed: 2.105 | Actual Speed: 2.016 | Computed Speed: 1.905 | Actual Speed: 2.008 | Computed Speed: 2.105 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.014 | Computed Speed: 2.222 | Actual Speed: 2.016 | Computed Speed: 2.000'
+
+
+
+3 m/s Round 1 Loaded - 10 Kg
+2025-07-01 17:54:55:   b''
+2025-07-01 17:55:01:   b'B3 d346:  | Starting the bot @ 3m/s'
+2025-07-01 17:55:15:   b''
+2025-07-01 17:55:22:   b'B3 d346:  | Starting the bot @ 3m/s | Actual Speed: 2.999 | Computed Speed: 3.077 | Actual Speed: 2.996 | Computed Speed: 3.077 | Actual Speed: 2.994 | Computed Speed: 2.857 | Actual Speed: 2.996 | Computed Speed: 3.077 | Actual Speed: 2.999 | Computed Speed: 2.857 | Actual Speed: 3.005 | Computed Speed: 3.077 | Actual Speed: 3.009 | Computed Speed: 3.077 | Actual Speed: 3.014 | Computed Speed: 3.077 | Actual Speed: 3.022 | Computed Speed: 3.077 | Actual Speed: 3.027 | Computed Speed: 3.077 | Actual Speed: 3.031 | Computed Speed: 3.077 | Actual Speed: 3.035 | Computed Speed: 3.077 | Actual Speed: 3.033 | Computed Speed: 3.077 | Actual Speed: 3.027 | Computed Speed: 3.077 | Actual Speed: 3.022 | Computed Speed: 2.857 | Actual Speed: 3.014 | Computed Speed: 3.077 | Actual Speed: 3.012 | Computed Speed: 2.857 | Actual Speed: 3.014 | Computed Speed: 3.077 | Actual Speed: 3.016 | Computed Speed: 3.077'
+
+
+
+
+1 m/s Round 1 Unloaded
+
+2025-07-02 09:42:55:   b'B3 d346:  | Starting the bot @ 1m/s'
+2025-07-02 09:43:01:   b'B3 d346:  | Actual Speed: 1.008 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 1.026 | Actual Speed: 1.000 | Computed Speed: 0.976 | Actual Speed: 1.008 | Computed Speed: 1.081 | Actual Speed: 1.006 | Computed Speed: 1.000 | Actual Speed: 1.002 | Computed Speed: 1.000 | Actual Speed: 1.008 | Computed Speed: 1.026 | Actual Speed: 1.010 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.026 | Actual Speed: 1.000 | Computed Speed: 1.000 | Actual Speed: 0.997 | Computed Speed: 1.000 | Actual Speed: 0.997 | Computed Speed: 0.976 | Actual Speed: 1.000 | Computed Speed: 1.053 | Actual Speed: 0.999 | Computed Speed: 0.976 | Actual Speed: 0.997 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.000 | Actual Speed: 0.995 | Computed Speed: 1.053 | Actual Speed: 0.995 | Computed Speed: 1.000'
+
+
+1 m/s Round 2 Unloaded
+2025-07-02 09:43:57:   b'B3 d346:  | Starting the bot @ 1m/s'
+2025-07-02 09:44:03:   b'B3 d346:  | Actual Speed: 1.008 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 1.026 | Actual Speed: 1.002 | Computed Speed: 0.976 | Actual Speed: 1.010 | Computed Speed: 1.081 | Actual Speed: 1.008 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 1.000 | Actual Speed: 1.006 | Computed Speed: 1.026 | Actual Speed: 1.008 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.000 | Actual Speed: 1.000 | Computed Speed: 1.026 | Actual Speed: 1.002 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.000 | Actual Speed: 0.997 | Computed Speed: 0.976 | Actual Speed: 0.999 | Computed Speed: 1.026 | Actual Speed: 0.997 | Computed Speed: 1.000 | Actual Speed: 0.995 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.000 | Actual Speed: 0.999 | Computed Speed: 1.053 | Actual Speed: 0.997 | Computed Speed: 1.000'
+
+
+2 m/s Round 1 Unloaded
+2025-07-02 09:46:49:   b'B3 d346:  | Starting the bot @ 2m/s | Actual Speed: 2.005 | Computed Speed: 2.000 | Actual Speed: 2.001 | Computed Speed: 2.000 | Actual Speed: 2.001 | Computed Speed: 1.905 | Actual Speed: 2.003 | Computed Speed: 2.105 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.105 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.105 | Actual Speed: 2.014 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.008 | Computed Speed: 2.105 | Actual Speed: 2.008 | Computed Speed: 1.905 | Actual Speed: 2.008 | Computed Speed: 2.105 | Actual Speed: 2.008 | Computed Speed: 2.000 | Actual Speed: 2.008 | Computed Speed: 2.105 | Actual Speed: 2.008 | Computed Speed: 2.000'
+
+
+
+2 m/s Round 2 Unloaded
+2025-07-02 09:47:40:   b''
+2025-07-02 09:47:46:   b'B3 d346:  | Starting the bot @ 2m/s | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.005 | Computed Speed: 2.105 | Actual Speed: 2.005 | Computed Speed: 1.905 | Actual Speed: 2.008 | Computed Speed: 2.105 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.105 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.016 | Computed Speed: 2.000 | Actual Speed: 2.018 | Computed Speed: 2.000 | Actual Speed: 2.018 | Computed Speed: 2.105 | Actual Speed: 2.016 | Computed Speed: 2.000 | Actual Speed: 2.012 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.003 | Computed Speed: 2.000 | Actual Speed: 2.005 | Computed Speed: 2.000 | Actual Speed: 2.006 | Computed Speed: 2.000 | Actual Speed: 2.010 | Computed Speed: 2.105 | Actual Speed: 2.010 | Computed Speed: 2.105'
+
+
+3 m/s Round 1 Unloaded
+2025-07-02 09:50:22:   b''
+2025-07-02 09:50:28:   b'B3 d346:  | Starting the bot @ 3m/s | Actual Speed: 3.003 | Computed Speed: 2.857 | Actual Speed: 2.997 | Computed Speed: 3.077 | Actual Speed: 2.994 | Computed Speed: 2.857 | Actual Speed: 2.994 | Computed Speed: 3.077 | Actual Speed: 2.999 | Computed Speed: 2.857 | Actual Speed: 3.007 | Computed Speed: 3.077 | Actual Speed: 3.012 | Computed Speed: 3.077 | Actual Speed: 3.018 | Computed Speed: 3.077 | Actual Speed: 3.025 | Computed Speed: 3.077 | Actual Speed: 3.027 | Computed Speed: 3.077 | Actual Speed: 3.029 | Computed Speed: 3.077 | Actual Speed: 3.025 | Computed Speed: 3.077 | Actual Speed: 3.022 | Computed Speed: 3.077 | Actual Speed: 3.016 | Computed Speed: 3.077 | Actual Speed: 3.014 | Computed Speed: 2.857 | Actual Speed: 3.012 | Computed Speed: 3.077 | Actual Speed: 3.016 | Computed Speed: 3.077 | Actual Speed: 3.018 | Computed Speed: 3.077 | Actual Speed: 3.020 | Computed Speed: 3.077'
+
+
+3 m/s Round 2 Unloaded
+2025-07-02 09:51:19:   b'B3 d346:  | Starting the bot @ 3m/s | Actual Speed: 3.001 | Computed Speed: 2.857 | Actual Speed: 2.997 | Computed Speed: 3.077 | Actual Speed: 2.999 | Computed Speed: 2.857 | Actual Speed: 3.001 | Computed Speed: 3.077 | Actual Speed: 3.005 | Computed Speed: 3.077 | Actual Speed: 3.011 | Computed Speed: 3.077 | Actual Speed: 3.012 | Computed Speed: 2.857 | Actual Speed: 3.016 | Computed Speed: 3.077 | Actual Speed: 3.020 | Computed Speed: 3.077 | Actual Speed: 3.024 | Computed Speed: 3.077 | Actual Speed: 3.025 | Computed Speed: 3.077 | Actual Speed: 3.027 | Computed Speed: 3.077 | Actual Speed: 3.025 | Computed Speed: 3.077 | Actual Speed: 3.024 | Computed Speed: 3.077 | Actual Speed: 3.018 | Computed Speed: 2.857 | Actual Speed: 3.014 | Computed Speed: 3.077 | Actual Speed: 3.012 | Computed Speed: 2.857 | Actual Speed: 3.014 | Computed Speed: 3.333 | Actual Speed: 3.016 | Computed Speed: 2.857'
+
+
+
+
+0.05 m/s loaded 10KG Round 1
+
+2025-07-02 12:32:34:   b''
+2025-07-02 12:32:40:   b'B3 d346:  | Starting the bot @ 3m/s'
+2025-07-02 12:32:46:   b'B3 d346:  | Actual Speed: 0.043 | Computed Speed: 0.042 | Actual Speed: 0.041 | Computed Speed: 0.044 | Actual Speed: 0.045 | Computed Speed: 0.042 | Actual Speed: 0.043 | Computed Speed: 0.044'
+2025-07-02 12:32:53:   b'B3 d346:  | Actual Speed: 0.043 | Computed Speed: 0.066 | Actual Speed: 0.039 | Computed Speed: 0.041 | Actual Speed: 0.039 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.113 | Actual Speed: 0.043 | Computed Speed: 0.064 | Actual Speed: 0.041 | Computed Speed: 0.040 | Actual Speed: 0.043 | Computed Speed: 0.041'
+2025-07-02 12:32:59:   b'B3 d346:  | Actual Speed: 0.043 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.041 | Actual Speed: 0.043 | Computed Speed: 0.043 | Actual Speed: 0.047 | Computed Speed: 0.046 | Actual Speed: 0.045 | Computed Speed: 0.044 | Actual Speed: 0.047 | Computed Speed: 0.046 | Actual Speed: 0.050 | Computed Speed: 0.048'
+2025-07-02 12:33:05:   b'B3 d346:  | Actual Speed: 0.049 | Computed Speed: 0.050 | Actual Speed: 0.049 | Computed Speed: 0.049 | Actual Speed: 0.049 | Computed Speed: 0.130'
+
+
+0.05 m/s loaded 10KG Round 2
+
+
+2025-07-02 12:34:21:   b''
+2025-07-02 12:34:27:   b'B3 d346:  | Starting the bot @ 3m/s'
+2025-07-02 12:34:33:   b'B3 d346:  | Actual Speed: 0.043 | Computed Speed: 0.042 | Actual Speed: 0.041 | Computed Speed: 0.044 | Actual Speed: 0.045 | Computed Speed: 0.043 | Actual Speed: 0.043 | Computed Speed: 0.046 | Actual Speed: 0.045 | Computed Speed: 0.043 | Actual Speed: 0.039 | Computed Speed: 0.041 | Actual Speed: 0.039 | Computed Speed: 0.040'
+2025-07-02 12:34:39:   b'B3 d346:  | Actual Speed: 0.041 | Computed Speed: 0.040 | Actual Speed: 0.039 | Computed Speed: 0.039 | Actual Speed: 0.041 | Computed Speed: 0.041 | Actual Speed: 0.041 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.041 | Actual Speed: 0.045 | Computed Speed: 0.043'
+2025-07-02 12:34:45:   b'B3 d346:  | Actual Speed: 0.045 | Computed Speed: 0.046 | Actual Speed: 0.045 | Computed Speed: 0.044 | Actual Speed: 0.045 | Computed Speed: 0.141 | Actual Speed: 0.047 | Computed Speed: 0.068 | Actual Speed: 0.050 | Computed Speed: 0.048 | Actual Speed: 0.049 | Computed Speed: 0.161 | Actual Speed: 0.047 | Computed Speed: 0.074 | Actual Speed: 0.050 | Computed Speed: 0.049'
+2025-07-02 12:35:46:   b''
+
+
+
+0.05 m/s unloaded 10KG Round 1
+
+2025-07-02 12:35:58:   b'B3 d346:  | Actual Speed: 0.043 | Computed Speed: 0.044 | Actual Speed: 0.045 | Computed Speed: 0.120 | Actual Speed: 0.000 | Computed Speed: 0.066 | Actual Speed: 0.043 | Computed Speed: 0.045 | Actual Speed: 0.041 | Computed Speed: 0.119 | Actual Speed: 0.045 | Computed Speed: 0.065 | Actual Speed: 0.039 | Computed Speed: 0.041 | Actual Speed: 0.039 | Computed Speed: 0.115 | Actual Speed: 0.041 | Computed Speed: 0.063'
+2025-07-02 12:36:04:   b'B3 d346:  | Actual Speed: 0.041 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.041 | Actual Speed: 0.043 | Computed Speed: 0.040 | Actual Speed: 0.043 | Computed Speed: 0.041 | Actual Speed: 0.047 | Computed Speed: 0.043'
+2025-07-02 12:36:11:   b'B3 d346:  | Actual Speed: 0.045 | Computed Speed: 0.046 | Actual Speed: 0.045 | Computed Speed: 0.044 | Actual Speed: 0.049 | Computed Speed: 0.048 | Actual Speed: 0.049 | Computed Speed: 0.048 | Actual Speed: 0.049 | Computed Speed: 0.050 | Actual Speed: 0.049 | Computed Speed: 0.049 | Actual Speed: 0.047 | Computed Speed: 0.130'
+
+0.05 m/s unloaded 10KG Round 2
+
+2025-07-02 12:36:28:   b''
+2025-07-02 12:36:35:   b'B3 d346:  | Starting the bot @ 3m/s'
+2025-07-02 12:36:41:   b'B3 d346:  | Actual Speed: 0.045 | Computed Speed: 0.043 | Actual Speed: 0.043 | Computed Speed: 0.044 | Actual Speed: 0.045 | Computed Speed: 0.043 | Actual Speed: 0.043 | Computed Speed: 0.046 | Actual Speed: 0.043 | Computed Speed: 0.119 | Actual Speed: 0.045 | Computed Speed: 0.066 | Actual Speed: 0.039 | Computed Speed: 0.041 | Actual Speed: 0.039 | Computed Speed: 0.114 | Actual Speed: 0.039 | Computed Speed: 0.062'
+2025-07-02 12:36:47:   b'B3 d346:  | Actual Speed: 0.041 | Computed Speed: 0.113 | Actual Speed: 0.043 | Computed Speed: 0.065 | Actual Speed: 0.039 | Computed Speed: 0.040 | Actual Speed: 0.041 | Computed Speed: 0.041 | Actual Speed: 0.043 | Computed Speed: 0.041 | Actual Speed: 0.043 | Computed Speed: 0.041 | Actual Speed: 0.045 | Computed Speed: 0.043'
+2025-07-02 12:36:53:   b'B3 d346:  | Actual Speed: 0.047 | Computed Speed: 0.046 | Actual Speed: 0.045 | Computed Speed: 0.044 | Actual Speed: 0.049 | Computed Speed: 0.046 | Actual Speed: 0.050 | Computed Speed: 0.137 | Actual Speed: 0.049 | Computed Speed: 0.074 | Actual Speed: 0.047 | Computed Speed: 0.050 | Actual Speed: 0.049 | Computed Speed: 0.049'
