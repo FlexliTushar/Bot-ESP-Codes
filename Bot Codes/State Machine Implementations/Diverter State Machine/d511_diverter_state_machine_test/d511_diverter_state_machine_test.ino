@@ -137,6 +137,37 @@ portMUX_TYPE diverter_set_position_value_mux = portMUX_INITIALIZER_UNLOCKED;
 // HELPER FUNCTIONS
 // ==============================================================================
 
+// Convert enum to string functions
+String DiverterStateToString(DiverterState state) {
+  switch(state) {
+    case DIVERTER_LEFT: return "LEFT";
+    case DIVERTER_RIGHT: return "RIGHT";
+    case DIVERTER_SWITCHING: return "SWITCHING";
+    case DIVERTER_ERROR: return "ERROR";
+    case DIVERTER_STOP: return "STOP";
+    default: return "UNKNOWN";
+  }
+}
+
+String DiverterDirectionToString(DiverterDirection dir) {
+  switch(dir) {
+    case DIVERTER_DIRECTION_LEFT: return "LEFT";
+    case DIVERTER_DIRECTION_RIGHT: return "RIGHT";
+    case DIVERTER_DIRECTION_UNKNOWN: return "UNKNOWN";
+    default: return "UNKNOWN";
+  }
+}
+
+String DiverterPositionToString(DiverterPosition pos) {
+  switch(pos) {
+    case DIVERTER_POSITION_LEFT: return "LEFT";
+    case DIVERTER_POSITION_RIGHT: return "RIGHT";
+    case DIVERTER_POSITION_INTERIM: return "INTERIM";
+    case DIVERTER_POSITION_UNKNOWN: return "UNKNOWN";
+    default: return "UNKNOWN";
+  }
+}
+
 // Update high-level position based on current encoder position
 void UpdateDiverterPositionHighLevel() {
   if (front_diverter_current_position > front_diverter_right_thresold && 
@@ -323,13 +354,13 @@ void UpdateDiverterActuatorInputVariables() {
   if (diverter_current_state == DIVERTER_LEFT) {
     // ===== LEFT STATE =====
     diverter_set_torque_flag = false;
-    add_log("Diverter in LEFT position - torque disabled.");
+    add_log("Diverter in " + DiverterStateToString(DIVERTER_LEFT) + " position - torque disabled.");
   }
   
   else if (diverter_current_state == DIVERTER_RIGHT) {
     // ===== RIGHT STATE =====
     diverter_set_torque_flag = false;
-    add_log("Diverter in RIGHT position - torque disabled.");
+    add_log("Diverter in " + DiverterStateToString(DIVERTER_RIGHT) + " position - torque disabled.");
   }
   
   else if (diverter_current_state == DIVERTER_SWITCHING) {
@@ -340,14 +371,14 @@ void UpdateDiverterActuatorInputVariables() {
       front_diverter_set_position_value = front_diverter_left_thresold;
       rear_diverter_set_position_value = rear_diverter_left_thresold;
       portEXIT_CRITICAL(&diverter_set_position_value_mux);
-      add_log("Switching to LEFT - moving to front threshold: " + String(front_diverter_left_thresold) + " and rear threshold: " + String(rear_diverter_left_thresold));
+      add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT) + " - moving to front threshold: " + String(front_diverter_left_thresold) + " and rear threshold: " + String(rear_diverter_left_thresold));
     }
     else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
       portENTER_CRITICAL(&diverter_set_position_value_mux);
       front_diverter_set_position_value = front_diverter_right_thresold;
       rear_diverter_set_position_value = rear_diverter_right_thresold;
       portEXIT_CRITICAL(&diverter_set_position_value_mux);
-      add_log("Switching to RIGHT - moving to front threshold: " + String(front_diverter_right_thresold) + " and rear threshold: " + String(rear_diverter_right_thresold));
+      add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_RIGHT) + " - moving to front threshold: " + String(front_diverter_right_thresold) + " and rear threshold: " + String(rear_diverter_right_thresold));
     }
   }
   
@@ -376,8 +407,8 @@ void DIVERTER_STATE_TASK(void* pvParameters) {
     
     DiverterStateChangeOptions stateChange = UpdateDiverterState();
     if (stateChange == DIVERTER_STATE_CHANGED) {
-      add_log("State changed to: " + String(diverter_current_state) + " from " + String(diverter_previous_state));
-      add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + String(diverter_track_edge_direction) + ", Pos_HL: " + String(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
+      add_log("State changed to: " + DiverterStateToString(diverter_current_state) + " from " + DiverterStateToString(diverter_previous_state));
+      add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + DiverterDirectionToString(diverter_track_edge_direction) + ", Pos_HL: " + DiverterPositionToString(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
       UpdateDiverterActuatorInputVariables();
     } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
       add_log("Diverter State Machine in UNEXPECTED CONDITION!");
@@ -385,6 +416,7 @@ void DIVERTER_STATE_TASK(void* pvParameters) {
 
     if (!mcp.digitalRead(PANEL_LED_BUTTON) && global_error_status) {
       error_diverter_status = false;
+      add_log("Panel button pressed - clearing diverter error status.");
     }
   }
 }
@@ -468,16 +500,16 @@ void AUXILIARY_TASK(void* pvParameters) {
       // Toggle demand direction
       if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
         diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
-        add_log("AUX: Toggling demand direction to RIGHT");
+        add_log("AUX: Toggling demand direction to " + DiverterDirectionToString(DIVERTER_DIRECTION_RIGHT));
       } 
       else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
         diverter_track_edge_direction = DIVERTER_DIRECTION_LEFT;
-        add_log("AUX: Toggling demand direction to LEFT");
+        add_log("AUX: Toggling demand direction to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT));
       }
       else if (diverter_track_edge_direction == DIVERTER_DIRECTION_UNKNOWN) {
         // Initialize to LEFT on first toggle
         diverter_track_edge_direction = DIVERTER_DIRECTION_LEFT;
-        add_log("AUX: Initializing demand direction to LEFT");
+        add_log("AUX: Initializing demand direction to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT));
       }
       
       last_toggle_time = current_time;
