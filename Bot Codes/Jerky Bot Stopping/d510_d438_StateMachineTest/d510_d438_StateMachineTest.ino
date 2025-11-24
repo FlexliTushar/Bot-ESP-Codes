@@ -166,7 +166,7 @@ DriveMotorState drive_motor_current_state = DRIVE_MOTOR_STOP;
 DriveMotorState drive_motor_previous_state = DRIVE_MOTOR_STOP;
 DriveMotorDirection drive_motor_current_direction = DRIVE_MOTOR_FORWARD;
 DriveMotorDirection drive_motor_previous_direction = DRIVE_MOTOR_FORWARD;
-int drive_motor_sweep_speed = 0;
+int drive_motor_sweep_speed = S0_05;
 int drive_motor_set_speed = 0;
 int drive_motor_direction_value = 1;
 bool drive_motor_error_status = false;
@@ -573,7 +573,7 @@ void SENSOR_READING_TASK(void* pvParameters) {
 
     if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
       add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
-      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: ," + 
+      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: " + 
                 String(column_detected_in_sweep));
       ImplementDriveMotorState();
     }

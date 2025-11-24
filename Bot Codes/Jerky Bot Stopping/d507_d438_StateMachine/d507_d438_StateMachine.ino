@@ -1,3 +1,5 @@
+#define FIRMWARE_ID "d507"
+
 /*
   Table 1
   ------------------------------------------
@@ -33,7 +35,9 @@
 #include <Preferences.h>
 using namespace std;
 
-// Motor Speed Levels
+// ==============================================================================
+// MOTOR SPEED LEVELS
+// ==============================================================================
 #define S0_03 15   // 0.03 m/s
 #define S0_05 26   // 0.05 m/s
 #define S0_1 53    // 0.1 m/s
@@ -45,68 +49,190 @@ using namespace std;
 #define S2 1070    // 2 m/s
 #define S2_5 1337  // 2.5 m/s
 #define S3 1604    // 3 m/s
+#define ACCELERATION_RATE 800  // 800 rpm/s
+#define DECELERATION_RATE 800  // 800 rpm/s
 
-// GPIO Pin Assignments
-#define BUZZER 13
-#define EMG_PIN 12
-#define PANEL_LED_PIN 8
-#define COLUMN_INDICATOR_SENSOR 33
-#define TRAFFIC_INDICATOR_SENSOR 35
-#define PANEL_LED_BUTTON 7 
-#define FRONT_SERVO 2
-#define REAR_SERVO 3
-#define AFC_BOTTOM_LSW_PIN 3
-#define AFC_TOP_LSW_PIN 1
-#define AFC_PIN_1 19
-#define AFC_PIN_2 18
+// ==============================================================================
+// GPIO PIN ASSIGNMENTS
+// ==============================================================================
+#define SR_D1 36                      // ESP32 pin attached to Photo diode 1 of station reader
+#define SR_D2 39                      // ESP32 pin attached to Photo diode 2 of station reader
+#define SR_D3 34                      // ESP32 pin attached to Photo diode 3 of station reader
+#define BUZZER 13                     // ESP32 pin attached to Buzzer
+#define EMG_PIN 12                    // ESP32 pin attached to Electromagnets
+#define PANEL_LED_PIN 8               // ESP32 pin attached to Panel LED
+#define COLUMN_INDICATOR_SENSOR 33    // ESP32 pin attached to Column Indicator Sensor
+#define TRAFFIC_INDICATOR_SENSOR 35   // ESP32 pin attached to Traffic Indicator Sensor
+#define PANEL_LED_BUTTON 7            // ESP32 pin attached to Panel LED Button
+#define FRONT_SERVO 2                 // ESP32 pin attached to Front Servo of diverter
+#define REAR_SERVO 3                  // ESP32 pin attached to Rear Servo of diverter
+#define AFC_PIN_1 19                  // ESP32 pin attached to AFC Control Pin 1
+#define AFC_PIN_2 18                  // ESP32 pin attached to AFC Control Pin 2
 
+// ==============================================================================
+// MISCELLANEOUS MACROS
+// ==============================================================================
 #define ENABLE 1
 #define DISABLE 0
-#define SERVO_UART_DELAY 50
 
-//------- BOT B5 -----------
-#define CLOSE -100
-#define STAGE -50
-#define OFF 0
-#define CLOSEPOS 0
-#define STAGEPOS 15400
-#define MAXLIM 24570
-//--------------------------
+// ==============================================================================
+// ENUMS FOR STATE MACHINES
+// ==============================================================================
 
-// Constant variables
-const String CODE_ID = "d507";
-const char* SSID = "Server_PC";
-const char* PASSWORD = "msort@flexli";
-const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
-const int THRESHOLD_INTENSITY = 250;
-const static int SR_D1 = 36;  // ESP32 pin attached to Photo diode 1
-const static int SR_D2 = 39;  // ESP32 pin attached to Photo diode 2
-const static int SR_D3 = 34;  // ESP32 pin attached to Photo diode 3
+// Health monitoring
+enum HealthStatus {
+  SAFE = 1,             // System is in a safe state
+  WARNING = 0,          // System is in a warning state
+  CRITICAL = -1         // System is in a critical state
+};
+
+// WTM column detector state machine
+enum WTMReaderState {
+  WTM_BETWEEN_COLUMNS = 0,  // In 00 zone between columns
+  WTM_IN_COLUMN = 1         // On a column (01, 10, or 11)
+};
+
+// Drive motor direction
+enum DriveMotorDirection {
+  DRIVE_MOTOR_FORWARD = 1,  // Forward direction
+  DRIVE_MOTOR_REVERSE = -1  // Reverse direction
+};
+
+// Drive motor state transition output
+enum DriveMotorStateOutput {
+  DRIVE_MOTOR_STATE_NO_CHANGE = 0,  // No change in state
+  DRIVE_MOTOR_STATE_CHANGED = 1,    // State has changed
+  DRIVE_MOTOR_UNKNOWN_STATE = 2     // Unknown state
+};
+
+// Drive motor state machine
+enum DriveMotorState {
+  DRIVE_MOTOR_STOP = 1,             // Motor is stopped
+  DRIVE_MOTOR_STOPPING = 2,         // Motor is in the process of stopping
+  DRIVE_MOTOR_RUNNING = 3,          // Motor is running
+  DRIVE_MOTOR_SWEEPING_COLUMN = 4,  // Motor is sweeping a column
+  DRIVE_MOTOR_ERROR = 5             // Motor is in an error state
+};
+
+// ==============================================================================
+// GLOBAL CONSTANTS
+// ==============================================================================
+
+// WiFi Credentials
+const char* SSID = "Server_PC";         // WiFi SSID
+const char* PASSWORD = "msort@flexli";  // WiFi Password
+
+// Station reader constants
 const static uint16_t PT_UPPER_THR_LIMIT = 600;  // Threshold limit for rising photo diode reading.
 const static uint16_t PT_LOWER_THR_LIMIT = 400;  // Threshold limit for falling photo diode reading
 
-const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
-HTTPClient _http;
+// WTM reader constants
+const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
+const float MAJORITY_WARNING_THRESHOLD = 60.0;   // 60-80% is warning, < 60% is critical
+const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
+const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning, > 40% is critical
+const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Conservative threshold for column width
+const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames to consider valid column (filter noise)
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 30;    // Expected minimum frames for empty space (4cm at 2m/s ~20ms = 20-40 frames)
+const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 readings is safe for empty space
 
-// Monitoring variables
-unsigned long maxLoopTime;
-unsigned long loopStartTime;
-int numsOfIteration = 0;
-unsigned long maxLatency = 0;
-size_t maxMemoryUsed = 0;
-const int MAX_REATTEMPTS_FOR_SERVO_COM = 5;
+// Diverter constants
+const int MAX_REATTEMPTS_FOR_SERVO_COM = 5;      // Max reattempts for diverter servo communication
 
-// Logger variables
-String BOT_ID = "B";
-String debugLoggingString = "";
-HTTPClient httpDebugger;
-TaskHandle_t httpDebugLog;
-bool loggerFlag = true;
+// Drive motor constants
+const int DRIVE_MOTOR_SWEEP_SPEED = S0_05;       // Sweep speed of the drive motor
 
-// Bot Variables
+// ==============================================================================
+// SYSTEM RESOURCE MONITORING VARIABLES
+// ==============================================================================
+
+unsigned long maxLoopTime;                // Maximum loop execution time observed
+unsigned long loopStartTime;              // Start time of the current loop iteration
+unsigned long maxLatency = 0;             // Maximum loop function latency observed
+size_t maxMemoryUsed = 0;                 // Maximum memory used observed
+
+// ==============================================================================
+// LOGGER VARIABLES
+// ==============================================================================
+
+String BOT_ID = "B";                                                    // Bot identifier
+String debugLoggingString = "";                                         // Accumulated debug log string
+HTTPClient httpDebugger;                                                // HTTP client for debugging
+TaskHandle_t httpDebugLog;                                              // Task handle for HTTP debug logging
+bool loggerFlag = true;                                                 // Flag to enable/disable logging
+const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";  // URL for HTTP debug server
+
+// ==============================================================================
+// WTM READER VARIABLES
+// ==============================================================================
+
+WTMReaderState wtm_column_state = WTM_BETWEEN_COLUMNS;         // WTM column detection current state
+// Frame counts for each possible column state when IN_COLUMN
+int frameCount00 = 0;
+int frameCount01 = 0;
+int frameCount10 = 0;
+int frameCount11 = 0;
+int exitConfirmationCount = 0;                // Count of consecutive 00 samples
+const int EXIT_CONFIRMATION_THRESHOLD = 10;   // Need 10 consecutive 00s to confirm exit
+int totalFramesBetweenSpaces = 0;
+// WTM column tracking 
+String detectedColumnCode = "";               // The actual column code (01, 10, or 11)
+String currentColumnCode = "";                // Current column code being read
+HealthStatus majorityHealthWTM = SAFE;        // Majority's health status of the WTM column
+HealthStatus minorityHealthWTM = SAFE;        // Minority's health status of the WTM column
+HealthStatus overallHealthWTM = SAFE;         // Overall health status of the WTM column
+// Empty space tracking
+int emptySpaceFrameCount = 0;                          // Frame count for current empty space (pure 00s)
+int emptySpaceNoiseFrameCount = 0;                     // Count of non-00 frames detected during empty space (for health)
+int emptySpaceTotalFrameCount = 0;                     // Total frames in empty space including noise
+HealthStatus emptySpaceHealthWTM = SAFE;               // Health of empty space (should have minimal non-00 readings)
+HealthStatus emptySpaceMajorityHealthWTM = SAFE;       // Majority health (00 frames)
+HealthStatus emptySpaceMinorityHealthWTM = SAFE;       // Minority health (noise frames)
+int totalEmptySpacesDetectedWTM = 0;                   // Total empty spaces detected
+int totalWTMColumnsDetected = 0;                       // Total WTM columns detected
+// Column completion flag and data - set when column successfully read
+bool wtmColumnJustCompleted = false;               // Flag: true when column just finished reading
+String lastCompletedWTMColumnCode = "";            // The column code that was just read (01, 10, 11)
+HealthStatus lastCompletedWTMColumnHealth = SAFE;  // Health of the column that was just read
+// Tracking variables for station-to-station segment
+String previousStation = "X";
+int uniqueColumnsDetectedInSegment = 0;             // Count of unique columns (01, 10, 11) between stations
+int emptySpacesDetectedInSegment = 0;               // Count of 00 zones between stations
+// Tracking permission because of traffic
+bool traffic_permission = true;                     // true: if lastCompletedWTMColumnCode == "11", false: if lastCompletedWTMColumnCode == "01"
+
+// ==============================================================================
+// ERROR MODE VARIABLES
+// ==============================================================================
+bool global_error_permission = true;        // true: normal operation, false: enter error mode
+volatile bool firstTimeError = false;       // Flag to indicate first time entering error mode
+
+// ==============================================================================
+// PICK/DROP ASSIGNMENT VARIABLES
+// ==============================================================================
+bool current_assignment = true;             // true: pick/drop journey, false: maintenance  
+
+// ==============================================================================
+// DRIVE MOTOR VARIABLES
+// ==============================================================================
+int permitted_edge_speed = 0;                                             // Permitted speed on the current edge
+bool column_detected_in_sweep = false;                                    // true if a column was detected during sweep
+int drive_motor_current_speed = 0;                                        // Current speed of the drive motor - maxon feedback
+int drive_motor_previous_set_speed = 0;                                   // Previous set speed of the drive motor
+DriveMotorState drive_motor_current_state = DRIVE_MOTOR_STOP;             // Current state of the drive motor
+DriveMotorState drive_motor_previous_state = DRIVE_MOTOR_STOP;            // Previous state of the drive motor
+DriveMotorDirection drive_motor_current_direction = DRIVE_MOTOR_FORWARD;  // Current direction of the drive motor
+int drive_motor_set_speed = 0;                                            // Set speed of the drive motor
+int drive_motor_direction_value = 1;                                      // Direction value for motor control - 1: forward, -1: reverse
+bool drive_motor_error_status = false;                                    // Drive motor error status
+
+// ==============================================================================
+// DIVERTER VARIABLES
+// ==============================================================================
+Preferences prefs;
 Adafruit_MCP23X17 mcp;
-bool slowDownFlag = false;
-bool stopBotFlag = false;
+
+
 bool _photoTransistorCurrentStateArray[3] = { 0, 0, 0 };       // Array to store current state of sensors, either 0 or 1 based on threshold during station reading
 bool _photoTransistorPreviousStateArray[3] = { 0, 0, 0 };      // Array to store previous state of sensors, mainily to check if state has changed or not.
 
@@ -148,187 +274,31 @@ unordered_map<string, pair<int, int>> STATION_EDGE_EXPECTED_MAP = {
   { "I1-I12", {0, 0} }, { "I11-D2", {0, 0} }, { "I12-I11", {0, 0} }
 };
 
-ColumnState columnState = BETWEEN_COLUMNS;
-
-// Frame counts for each possible column state
-int frameCount00 = 0;
-int frameCount01 = 0;
-int frameCount10 = 0;
-int frameCount11 = 0;
-
-// Confirmation variables
-int exitConfirmationCount = 0;  // Count of consecutive 00 samples
-const int EXIT_CONFIRMATION_THRESHOLD = 10;  // Need 10 consecutive 00s to confirm exit
-
-// Column tracking
-int totalColumnsDetected = 0;
-String detectedColumnCode = "";  // The actual column code (01, 10, or 11)
-String currentColumnCode = "";    // Current column code being read
-String previousColumnCode = "";   // Previous column code that was detected
-int totalFramesBetweenSpaces = 0;  // Total frames from last empty space to current empty space
-
-// Health monitoring thresholds
-const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
-const float MAJORITY_WARNING_THRESHOLD = 60.0;   // 60-80% is warning, < 60% is critical
-const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
-const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning, > 40% is critical
-const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Conservative threshold for column width
-const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames to consider valid column (filter noise)
-const int DEFAULT_EMPTY_SPACE_THRESHOLD = 30;    // Expected minimum frames for empty space (4cm at 2m/s ~20ms = 20-40 frames)
-const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 readings is safe for empty space
-
-HealthStatus majorityHealth = SAFE;
-HealthStatus minorityHealth = SAFE;
-HealthStatus overallHealth = SAFE;
-
-// Empty space tracking for health monitoring
-int emptySpaceFrameCount = 0;        // Frame count for current empty space (pure 00s)
-int emptySpaceNoiseFrameCount = 0;   // Count of non-00 frames detected during empty space (for health)
-int emptySpaceTotalFrameCount = 0;   // Total frames in empty space including noise
-HealthStatus emptySpaceHealth = SAFE; // Health of empty space (should have minimal non-00 readings)
-HealthStatus emptySpaceMajorityHealth = SAFE;  // Majority health (00 frames)
-HealthStatus emptySpaceMinorityHealth = SAFE;  // Minority health (noise frames)
-int totalEmptySpacesDetected = 0;    // Total empty spaces detected
-
-// Column completion flag and data - set when column successfully read
-bool columnJustCompleted = false;      // Flag: true when column just finished reading
-String lastCompletedColumnCode = "";   // The column code that was just read (01, 10, 11)
-HealthStatus lastCompletedColumnHealth = SAFE;  // Health of the column that was just read
-
-// Tracking variables for station-to-station segment
-String previousStation = "X";
-int uniqueColumnsDetectedInSegment = 0;  // Count of unique columns (01, 10, 11) between stations
-int emptySpacesDetectedInSegment = 0;    // Count of 00 zones between stations
-
-SMS sm;
-bool rightDivertor = true;
-Preferences prefs;
-
-// Servo Limit Config variables.
-int front_diverter_left_limit = 0;
-int front_diverter_right_limit = 0;
-int front_diverter_tolerance = 0;
-int front_diverter_left_thresold = 0;
-int front_diverter_right_thresold = 0;
-
-int rear_diverter_left_limit = 0;
-int rear_diverter_right_limit = 0;
-int rear_diverter_tolerance = 0;
-int rear_diverter_left_thresold = 0;
-int rear_diverter_right_thresold = 0;
-
-int current_position_front_servo = 0;
-int current_position_rear_servo = 0;
-
-// Infeed stop variables
-bool startColumnCounter = false;
-int columnCounter = 0;
-bool infeedDetected = false;
-bool previousCIState = 0;
-bool previousTIState = 0;
-volatile int setSpeed;
-bool beepFlag = false;
-bool flapOpen = false;
-int packetCount = -1;
-String dropoffStation = "X";
-bool getDestinationAPIFlag = false;
-bool clearInfeedAPIFlag = false;
-bool startInfeedAPIColumnCounter = false;
-int infeedAPIcolumnCounter = 0;
-bool previousCIStateForInfeedAPI = false;
-TaskHandle_t apiTask;
-String expectedStation = "X";
-bool localisationFlag = true;
-volatile bool errorMode = false;
-volatile int errorCode = -1;
-bool diverterCheckFlag = false;
-bool previousCIStateDiversionCheck = 0;
-int columnCounterDiversioncheck = 0;
-bool flapMotorONFlag = false;
-bool updateParcelDroppedInTheDumpAPIFlag = false;
-bool updateParcelDroppedAPIFlag = false;
-bool afcPinState = false;
-unsigned long afcStartTime;
-bool closingFlap = false;
-unsigned long startClosingTime;
-
-// Infeed stop variables
-int _intermediateColumnFramesCount = 0;
-int _instantaneousFramesCount = 0;
-uint16_t _instantaneousIntensityMaxArray[3] = { 0 };
-uint16_t _instantaneousIntensityMinArray[3] = { 1023 };
-unsigned long stationReadStartTime;
-int columnNo = 0;
-volatile bool checkForCorrection = false;
-volatile bool checkForStopCondition = false;
-volatile int actualSetSpeed;
-volatile bool diverterDirection;
-bool previousDirection;
-portMUX_TYPE diverterDirectionMux = portMUX_INITIALIZER_UNLOCKED;
-int previousSetSpeed;
-portMUX_TYPE currentStationMux = portMUX_INITIALIZER_UNLOCKED;
-unsigned long diverterCheckStartTime;
-portMUX_TYPE setSpeedMux = portMUX_INITIALIZER_UNLOCKED;
-portMUX_TYPE checkForCorrectionMux = portMUX_INITIALIZER_UNLOCKED;
-portMUX_TYPE checkForStopConditionMux = portMUX_INITIALIZER_UNLOCKED;
-
+// ==============================================================================
+// SENSOR READING TASK VARIABLES (STATION READER + WTM READER)
+// ==============================================================================
 TaskHandle_t sensorReadingTask;
-volatile bool changeDirection = false;
-volatile bool firstTimeError = false;
 
-bool Traffic_Permission = false;
-bool Global_Error_Permission = false;
-bool Current_Assignment = false;
-int Permitted_Edge_Speed = 0;
-String previousColumnCode = "00";
-String currentColumnCode = "00";
+TaskHandle_t actuationTask;
 
-// Handler for the case when TI is OFF
-void HandleTrafficIndicatorDetectionOFF() {
-  // Case: If condition true then the bot is in decelerated mode
-  if (slowDownFlag) {
-    add_log("STARTING BCZ NO TRAFFIC");
-    // Set the bot to the SET_SPEED
-    portENTER_CRITICAL(&setSpeedMux);
-    setSpeed = actualSetSpeed;
-    portEXIT_CRITICAL(&setSpeedMux);
-    stopBotFlag = false;
-    if (setSpeed != S0_05) {
-      add_log("Slow down made false because traffic is OFF");
-      slowDownFlag = false;
-    }
-  }
-}
-
-// Handler for the case when TI is ON
-void HandleTrafficIndicatorDetectionON() {
-  // Case: If condition true then the bot is in accelerated mode else bot is in decelerated mode
-  if (!slowDownFlag) {
-    // Set the bot to the MINIMAL_SPEED
-    add_log("SLOWING BCZ TRAFFIC");
-    portENTER_CRITICAL(&setSpeedMux);
-    setSpeed = S0_05;
-    portEXIT_CRITICAL(&setSpeedMux);
-    add_log("Slow down made true because traffic is ON");
-    slowDownFlag = true;
-  } else {
-    portENTER_CRITICAL(&checkForStopConditionMux);
-    checkForStopCondition = true;
-    portEXIT_CRITICAL(&checkForStopConditionMux);
-  }
+// Function to read TI and CI sensor combo
+String ReadSensorCombo() {
+  int trafficDetected = !digitalRead(TRAFFIC_INDICATOR_SENSOR);
+  int columnDetected = !digitalRead(COLUMN_INDICATOR_SENSOR);
+  return String(trafficDetected) + String(columnDetected);
 }
 
 // Function to handle column detection and processing
 void ProcessColumnDetection(String combo) {
   // Column detection state machine
-  switch (columnState) {
-    case BETWEEN_COLUMNS:
+  switch (wtm_column_state) {
+    case WTM_BETWEEN_COLUMNS:
       // We're in the 00 zone between columns
       if (combo == "00") {
         emptySpaceFrameCount++;
       } else {
         // Detected non-00 in empty space - transition to column
-        columnState = IN_COLUMN;
+        wtm_column_state = WTM_IN_COLUMN;
         totalFramesBetweenSpaces = 0;
         emptySpaceNoiseFrameCount = 0;
         frameCount00 = 0;
@@ -351,7 +321,7 @@ void ProcessColumnDetection(String combo) {
       }
       break;
 
-    case IN_COLUMN:
+    case WTM_IN_COLUMN:
       // Count all frames by type
       if (combo == "00") {
         frameCount00++;
@@ -392,7 +362,7 @@ void ProcessColumnDetection(String combo) {
             emptySpaceFrameCount += EXIT_CONFIRMATION_THRESHOLD;
             emptySpaceTotalFrameCount = emptySpaceFrameCount + totalFramesBetweenSpaces;
             emptySpaceNoiseFrameCount += totalFramesBetweenSpaces;
-            columnState = BETWEEN_COLUMNS;
+            wtm_column_state = WTM_BETWEEN_COLUMNS;
             return;
           } else {
             emptySpaceTotalFrameCount = emptySpaceFrameCount;
@@ -421,9 +391,9 @@ void ProcessColumnDetection(String combo) {
           
           columnJustCompleted = true;
           lastCompletedColumnCode = detectedColumnCode;
-          lastCompletedColumnHealth = AnalyzeColumnHealth();
+          lastCompletedColumnHealth = AnalyzeWTMColumnHealth();
           
-          columnState = BETWEEN_COLUMNS;
+          wtm_column_state = WTM_BETWEEN_COLUMNS;
           emptySpaceFrameCount = EXIT_CONFIRMATION_THRESHOLD;
         }
       } else {
@@ -436,12 +406,15 @@ void ProcessColumnDetection(String combo) {
 // Function to handle column-based decisions
 void HandleColumnDecisions() {
   if (columnJustCompleted) {
+    if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
+      column_detected_in_sweep = true;
+    }
     if (lastCompletedColumnCode == "11") {
       add_log("Traffic Detected");
-      Traffic_Permission = false;
+      traffic_permission = false;
     } else if (lastCompletedColumnCode == "01") {
       add_log("Traffic Not Detected");
-      Traffic_Permission = true;
+      traffic_permission = true;
     } else if (lastCompletedColumnCode == "10") {
       add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
     }
@@ -454,555 +427,200 @@ void HandleColumnDecisions() {
   }
 }
 
-void ReadStationViaPhotoDiode() {
-  for (int i = 0; i < 3; i++) {
-    _photoTransistorPreviousStateArray[i] = _photoTransistorCurrentStateArray[i];
-    switch (i) {
-      case 0:
-        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D1), 0, 4096, 0, 1024);
-        break;
-      case 1:
-        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D2), 0, 4096, 0, 1024);
-        break;
-      case 2:
-        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D3), 0, 4096, 0, 1024);
-        break;
-    }
-    if (_photoTransistorCurrentValueArray[i] > PT_UPPER_THR_LIMIT) {
-      _photoTransistorCurrentStateArray[i] = 1;
-    } else if (_photoTransistorCurrentValueArray[i] < PT_LOWER_THR_LIMIT) {
-      _photoTransistorCurrentStateArray[i] = 0;
-    }
-  }
-}
-
-void CheckColumnIntensityWarningLevel(String segment) {
-  // Loop through each bit of the segment
-  for (int i = 0; i < 3; i++) {
-    int bit = segment[i] - '0';
-    int intensityMax = _instantaneousIntensityMaxArray[i];
-    int intensityMin = _instantaneousIntensityMinArray[i];
-    String status = "Healthy";
-
-    if (bit == 1) {
-      if (intensityMax >= 800)
-        status = "Healthy";
-      else if (intensityMax >= 700 && intensityMax < 800)
-        status = "Warning";
-      else
-        status = "Critical";
-    } else { // bit == 0
-      if (intensityMin <= 200)
-        status = "Healthy";
-      else if (intensityMin > 200 && intensityMin <= 300)
-        status = "Warning";
-      else
-        status = "Critical";
-    }
-
-    if (status != "Healthy") {
-      add_log("Photodiode " + String(i + 1) + ": " + status);
-    }
-  }
-}
-
-void ReinitialiseVariables() {
-  for (int i = 0 ; i < 3 ; i++) {
-    _photoTransistorPreviousStateArray[i] = 0;
-    _finalColumnCodeArray[i] = "000";
-    _photoTransistorCurrentValueArray[i] = 0;
-    _photoTransistorCurrentStateArray[i] = 0;
-  }
-  _intermediateColumnCode = "000";
-  _previousIntermediateColumnCode = "000";
-  columnNo = 0;
-}
-
-String GetStationCodeFromDataReadByStationSensor() {
-  String instColumnCode = String(_photoTransistorCurrentStateArray[0]) + String(_photoTransistorCurrentStateArray[1]) + String(_photoTransistorCurrentStateArray[2]);
-  String prevInstColumnCode = String(_photoTransistorPreviousStateArray[0]) + String(_photoTransistorPreviousStateArray[1]) + String(_photoTransistorPreviousStateArray[2]);
-  if (instColumnCode == prevInstColumnCode) {
-    _instantaneousFramesCount++;
-    for (int i = 0 ; i < 3 ; i++) {
-      _instantaneousIntensityMaxArray[i] = max(_instantaneousIntensityMaxArray[i], _photoTransistorCurrentValueArray[i]);
-      _instantaneousIntensityMinArray[i] = min(_instantaneousIntensityMinArray[i], _photoTransistorCurrentValueArray[i]);
-    }
-  } else {
-    add_log("Inst. Col: " + prevInstColumnCode);
-    add_log("Inst. FC: " + String(_instantaneousFramesCount));
-    add_log("Inst. Max. Intensity: { " + String(_instantaneousIntensityMaxArray[0]) + ", " + String(_instantaneousIntensityMaxArray[1]) + ", " + String(_instantaneousIntensityMaxArray[2]) + " }");
-    add_log("Inst. Min. Intensity: { " + String(_instantaneousIntensityMinArray[0]) + ", " + String(_instantaneousIntensityMinArray[1]) + ", " + String(_instantaneousIntensityMinArray[2]) + " }");
-    CheckColumnIntensityWarningLevel(prevInstColumnCode);
-    _instantaneousFramesCount = 1;
-    for (int i = 0 ; i < 3 ; i++) {
-      _instantaneousIntensityMaxArray[i] = _photoTransistorCurrentValueArray[i];
-      _instantaneousIntensityMinArray[i] = _photoTransistorCurrentValueArray[i];
-    }
-  }
-
-  if (instColumnCode == "111") {
-    _intermediateColumnCode = instColumnCode;
-  }
-
-  // START STATION READING
-  if (!_readingInProcess && instColumnCode == "111") {
-    _readingInProcess = true;
-    stationReadStartTime = millis();
-    // // Serial.println("Detection Started");
-  }
-
-  // STATION READING COMPLETED
-  String stationCode;
-  if (instColumnCode == "000" && _readingInProcess) {
-    if (_finalColumnCodeArray[2] != "000" && _finalColumnCodeArray[1] != "000" && _finalColumnCodeArray[0] != "000") {
-      stationCode = _finalColumnCodeArray[2] + _finalColumnCodeArray[1] + _finalColumnCodeArray[0];
-      _rightStationDetected = true;
-      _readingInProcess = false;
-      // // Serial.println("Detection Completed");
-    }
-    add_log("Read time: " + String(millis() - stationReadStartTime));
-    if (columnNo < 3) add_log("Bot has skipped " + String(3 - columnNo) + " columns");
-    ReinitialiseVariables();
-  }
-
-  // OPEN ZONE TRAVEL
-  if (instColumnCode == "000") {
-    _readingInProcess = false;
-  }
-
-  if (_readingInProcess) {
-    int currentStateSum = _photoTransistorCurrentStateArray[0] + _photoTransistorCurrentStateArray[1] + _photoTransistorCurrentStateArray[2];
-    int prevStateSum = _photoTransistorPreviousStateArray[0] + _photoTransistorPreviousStateArray[1] + _photoTransistorPreviousStateArray[2];
-    if (currentStateSum < prevStateSum) {
-      _intermediateColumnCode = instColumnCode;
-      _intermediateColumnFramesCount = 1;
-    } else if (_intermediateColumnCode == instColumnCode) {
-      // Nothing
-      if (currentStateSum > 0 && currentStateSum < 3) {
-        _intermediateColumnFramesCount++;
-      }
-    }
-
-    if (_previousIntermediateColumnCode != "000" && _previousIntermediateColumnCode != "111" && _intermediateColumnCode == "111" && _intermediateColumnCode != "000" && _finalColumnCodeArray[0] != _previousIntermediateColumnCode) {
-      if (_intermediateColumnFramesCount >= 5) {
-        _finalColumnCodeArray[2] = _finalColumnCodeArray[1];
-        _finalColumnCodeArray[1] = _finalColumnCodeArray[0];
-        _finalColumnCodeArray[0] = _previousIntermediateColumnCode;
-        columnNo++;
-        add_log("Col No.: " + String(columnNo));
-        if (columnNo > 3) add_log("Bot is reading more than 3 columns");
-      } else {
-        add_log("Potential fluke column. No. of frames: " + String(_intermediateColumnFramesCount));
-      }
-      add_log("Inter. Col: " + _previousIntermediateColumnCode);
-      add_log("Inter. FC: " + String(_intermediateColumnFramesCount));
-    }
-    _previousIntermediateColumnCode = _intermediateColumnCode;
-  }
-
-  String stationCodeMain = "";
-  if (_rightStationDetected) {
-    _rightStationDetected = false;
-    stationCodeMain = stationCode;
-  }
-  return stationCodeMain;
-}
-
-String TransformStationCodeIntoStationId(const String &stationCode) {
-  // Check if the station code is present in the StationCodeToId map
-  string stationCodeString = string(stationCode.c_str());
-  if (STATION_CODE_TO_STATION_ID_MAP.find(stationCodeString) != STATION_CODE_TO_STATION_ID_MAP.end()) {
-    string stationID = STATION_CODE_TO_STATION_ID_MAP.at(stationCodeString);
-    return String(stationID.c_str());
-  }
-  return "";
-}
-
-bool CheckStationValidity(const String &stationCode) {
-  // Check if the station-code is present in the keys of STATION_CODE_TO_STATION_ID hash-map
-  string stationCodeString = string(stationCode.c_str());
-  return STATION_CODE_TO_STATION_ID_MAP.find(stationCodeString) != STATION_CODE_TO_STATION_ID_MAP.end();
-}
-
-String GetExpectedStationFromStationId(const String &stationCode) {
-  // Check if the station code is present in the StationCodeToId map
-  string stationCodeString = string(stationCode.c_str());
-  if (STATION_ID_TO_EXPECTED_STATION_ID_MAP.find(stationCodeString) != STATION_ID_TO_EXPECTED_STATION_ID_MAP.end()) {
-    string stationID = STATION_ID_TO_EXPECTED_STATION_ID_MAP.at(stationCodeString);
-    return String(stationID.c_str());
-  }
-  return "";
-}
-
-bool GetDirectionFromStationId(const String &stationCode) {
-  // Check if the station code is present in the StationCodeToId map
-  string stationCodeString = string(stationCode.c_str());
-  if (STATION_ID_TO_DIRECTION_MAP.find(stationCodeString) != STATION_ID_TO_DIRECTION_MAP.end()) {
-    bool direction = STATION_ID_TO_DIRECTION_MAP.at(stationCodeString);
-    return direction;
-  }
-  return 1;
-}
-
-int GetSetSpeedAsPerStation(const String &stationId) {
-  // Check if the station code is present in the StationCodeToId map
-  string stationCodeString = string(stationId.c_str());
-  if (STATION_ID_TO_SPEED_MAP.find(stationCodeString) != STATION_ID_TO_SPEED_MAP.end()) {
-    int speed = STATION_ID_TO_SPEED_MAP.at(stationCodeString);
-    return speed;
-  }
-  return S0_5;
-}
-
-// Flap and diverter functions
-void DivertLeft() {
-  int code = 1;
-  int count = 0;
-  while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-    current_position_front_servo = sm.ReadPos(FRONT_SERVO);
-    code = sm.getLastError();
-    count++;
-  }
-  if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-    errorMode = true;
-    errorCode = 5;
-    firstTimeError = true;
-    return;
-  }
-  delay(1);
-  code = 1;
-  count = 0;
-  while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-    current_position_rear_servo = sm.ReadPos(REAR_SERVO);
-    code = sm.getLastError();
-    count++;
-  }
-  if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-    errorMode = true;
-    errorCode = 5;
-    firstTimeError = true;
-    return;
-  }
-  delay(1);
-  if (current_position_front_servo < front_diverter_left_thresold) {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.EnableTorque(FRONT_SERVO, DISABLE);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  } else {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.WritePosEx(FRONT_SERVO, front_diverter_left_thresold, 100);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(10);
-  }
-  
-  if (current_position_rear_servo > rear_diverter_left_thresold) {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.EnableTorque(REAR_SERVO, DISABLE);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  } else {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.WritePosEx(REAR_SERVO, rear_diverter_left_thresold, 100);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  }
-}
-
-void DivertRight() {
-  int code = 1;
-  int count = 0;
-  while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-    current_position_front_servo = sm.ReadPos(FRONT_SERVO);
-    code = sm.getLastError();
-    count++;
-  }
-  if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-    errorMode = true;
-    errorCode = 5;
-    firstTimeError = true;
-    return;
-  }
-  delay(1);
-  code = 1;
-  count = 0;
-  while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-    current_position_rear_servo = sm.ReadPos(REAR_SERVO);
-    code = sm.getLastError();
-    count++;
-  }
-  if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-    errorMode = true;
-    errorCode = 5;
-    firstTimeError = true;
-    return;
-  }
-  delay(1);
-  if (current_position_front_servo > front_diverter_right_thresold) {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.EnableTorque(FRONT_SERVO, DISABLE);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  } else {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.WritePosEx(FRONT_SERVO, front_diverter_right_thresold, 100);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(10);
-  }
-  
-  if (current_position_rear_servo < rear_diverter_right_thresold) {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.EnableTorque(REAR_SERVO, DISABLE);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  } else {
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      sm.WritePosEx(REAR_SERVO, rear_diverter_right_thresold, 100);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-  }
-}
-
-void DiverterTest() {
-  DivertLeft();
-  delay(1000);
-  DivertRight();
-  delay(1000);
-}
-
-void SetDiverter(bool direction) {
-  if (direction) {
-    if (!rightDivertor) {
-      DivertRight();
-      rightDivertor = true;
-    }
-  } else {
-    if(rightDivertor) {
-      DivertLeft();
-      rightDivertor = false;
-    }
-  }
-}
-
-void ErrorHandling() {
-  if (errorCode == 3) {
-    if (firstTimeError) {
-      add_log("ER3: UNEXPECTED_STATION_ERROR");
-      add_log("Expected Station: " + expectedStation + " Detected Station: " + currentStation);
-      Beep();
-      mcp.digitalWrite(PANEL_LED_PIN, HIGH);
-      firstTimeError = false;
-    }
-    if (!mcp.digitalRead(PANEL_LED_BUTTON)) {
-      // Until panel button is pressed
-      portENTER_CRITICAL(&setSpeedMux);
-      setSpeed = S0_5;
-      portEXIT_CRITICAL(&setSpeedMux);
-      localisationFlag = true;
-      dropoffStation = "D18";
-      errorCode = -1;
-      errorMode = false;
-    }
-  }
-
-  if (errorCode == 5) {
-    if (firstTimeError) {
-      add_log("ER5: FAILED_DIVERTER_ERROR");
-      Beep();
-      mcp.digitalWrite(PANEL_LED_PIN, HIGH);
-      firstTimeError = false;
-    }
-    if (!mcp.digitalRead(PANEL_LED_BUTTON)) {
-      // Until panel button is pressed
-      portENTER_CRITICAL(&setSpeedMux);
-      setSpeed = S0_5;
-      portEXIT_CRITICAL(&setSpeedMux);
-      localisationFlag = true;
-      dropoffStation = "D18";
-      errorCode = -1;
-      errorMode = false;
-    }
-  }
-  
-  if (errorCode == 4) {
-    if (firstTimeError) {
-      add_log("ER4: INVALID_STATION_ERROR");
-      Beep();
-      mcp.digitalWrite(PANEL_LED_PIN, HIGH);
-      firstTimeError = false;
-    }
-    if (!mcp.digitalRead(PANEL_LED_BUTTON)) {
-      // Until panel button is pressed
-      portENTER_CRITICAL(&setSpeedMux);
-      setSpeed = S0_5;
-      portEXIT_CRITICAL(&setSpeedMux);
-      localisationFlag = true;
-      dropoffStation = "D18";
-      errorCode = -1;
-      errorMode = false;
-    }
-  }
-}
-
-void CheckDiverter() {
-  if (diverterCheckFlag) {
-    int code = 1;
-    int count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      current_position_front_servo = sm.ReadPos(FRONT_SERVO);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-    code = 1;
-    count = 0;
-    while(code && count < MAX_REATTEMPTS_FOR_SERVO_COM) {
-      current_position_rear_servo = sm.ReadPos(REAR_SERVO);
-      code = sm.getLastError();
-      count++;
-    }
-    if ((count == MAX_REATTEMPTS_FOR_SERVO_COM && code == 1) || (count > MAX_REATTEMPTS_FOR_SERVO_COM)) {
-      errorMode = true;
-      errorCode = 5;
-      firstTimeError = true;
-      return;
-    }
-    delay(1);
-    bool direction = GetDirectionFromStationId(currentStation);
-    if (direction) {
-      if (current_position_front_servo > front_diverter_right_thresold - 30 && current_position_rear_servo < rear_diverter_right_thresold + 30) {
-        // Correct diversion
-      } else {
-        errorMode = true;
-        errorCode = 5;
-        firstTimeError = true;
-        add_log("Current front servo position: " + String(current_position_front_servo) + " Current rear servo position: " + String(current_position_rear_servo));
-        add_log("Front diverter right threshold: " + String(front_diverter_right_thresold) + " Rear diverter right threshold: " + String(rear_diverter_right_thresold));
-      }
-    } else {
-      if (current_position_front_servo < front_diverter_left_thresold + 30 && current_position_rear_servo > rear_diverter_left_thresold - 30) {
-        // Correct diversion
-      } else {
-        errorMode = true;
-        errorCode = 5;
-        firstTimeError = true;
-        add_log("Current front servo position: " + String(current_position_front_servo) + " Current rear servo position: " + String(current_position_rear_servo));
-        add_log("Front diverter left threshold: " + String(front_diverter_left_thresold) + " Rear diverter left threshold: " + String(rear_diverter_left_thresold));
-      }
-    }
-  }
-}
-
-bool stopWhileStaging = false;
-bool stopWhileClosing = false;
-
-void StopFlap() {
-  digitalWrite(AFC_PIN_1, HIGH);
-  digitalWrite(AFC_PIN_2, HIGH);
-}
-
-void CloseFlap() {
-  digitalWrite(EMG_PIN, HIGH);    // Turn ON the electromagnets
-  digitalWrite(AFC_PIN_1, LOW);
-  digitalWrite(AFC_PIN_2, HIGH);
-}
-
-void OpenFlap() {
-  digitalWrite(EMG_PIN, LOW);
-}
-
-void StageFlap() {
-  digitalWrite(AFC_PIN_1, HIGH);
-  digitalWrite(AFC_PIN_2, LOW);
-}
-
 int offCounter = 0;
+
+DriveMotorStateOutput UpdateDriveMotorState() {
+    /*
+    Evaluates global variables and determines if state should change
+    Updates Current_State based on conditions and valid transitions
+    Returns: true if state was changed, false if no change
+    */
+    drive_motor_previous_state = drive_motor_current_state;    
+    // ----- FROM STOP STATE -----
+    if (drive_motor_current_state == DRIVE_MOTOR_STOP) {
+        // Transition to ERROR_MOTOR
+        if (drive_motor_error_status == true) {
+            drive_motor_current_state = DRIVE_MOTOR_ERROR;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        // Transition to RUNNING
+        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+            drive_motor_current_state = DRIVE_MOTOR_RUNNING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Transition to SWEEPING_COLUMN
+        if (current_assignment == true && drive_motor_current_speed == 0 && traffic_permission == false && global_error_permission == true) {
+            drive_motor_current_state = DRIVE_MOTOR_SWEEPING_COLUMN;
+            column_detected_in_sweep = false;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // No valid transition condition met and remain in STOP
+        drive_motor_current_state = DRIVE_MOTOR_STOP;
+        return DRIVE_MOTOR_STATE_NO_CHANGE;
+    }
+    
+    
+    // ----- FROM STOPPING STATE -----
+    else if (drive_motor_current_state == DRIVE_MOTOR_STOPPING) {
+        // Transition to ERROR_MOTOR
+        if (drive_motor_error_status == true) {
+            drive_motor_current_state = DRIVE_MOTOR_ERROR;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        // Transition to STOP (when vehicle has stopped)
+        if (drive_motor_current_speed == 0) {
+            drive_motor_current_state = DRIVE_MOTOR_STOP;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Transition to RUNNING (if assignment and permission restored)
+        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+            drive_motor_current_state = DRIVE_MOTOR_RUNNING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Still stopping - remain in STOPPING
+        drive_motor_current_state = DRIVE_MOTOR_STOPPING;
+        return DRIVE_MOTOR_STATE_NO_CHANGE;
+    }
+    
+    
+    // ----- FROM RUNNING STATE -----
+    else if (drive_motor_current_state == DRIVE_MOTOR_RUNNING) {
+        // Transition to ERROR_MOTOR
+        if (drive_motor_error_status == true) {
+            drive_motor_current_state = DRIVE_MOTOR_ERROR;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        // Transition to STOPPING (traffic permission removed)
+        if (global_error_permission == false || (current_assignment == true && traffic_permission == false)) {
+            drive_motor_current_state = DRIVE_MOTOR_STOPPING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Continue moving - remain in RUNNING
+        drive_motor_current_state = DRIVE_MOTOR_RUNNING;
+        return DRIVE_MOTOR_STATE_NO_CHANGE;
+    }
+    
+    
+    // ----- FROM SWEEPING_COLUMN STATE -----
+    else if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
+        // Transition to ERROR_MOTOR
+        if (drive_motor_error_status == true) {
+            drive_motor_current_state = DRIVE_MOTOR_ERROR;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        // Transition to STOPPING (column crossed)
+        if (global_error_permission == false || (current_assignment == true && traffic_permission == false && column_detected_in_sweep == true)) {
+            drive_motor_current_state = DRIVE_MOTOR_STOPPING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Transition to RUNNING (if traffic permission granted)
+        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+            drive_motor_current_state = DRIVE_MOTOR_RUNNING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Continue sweeping - remain in SWEEPING_COLUMN
+        drive_motor_current_state = DRIVE_MOTOR_SWEEPING_COLUMN;
+        return DRIVE_MOTOR_STATE_NO_CHANGE;
+    }
+    
+    
+    // ----- FROM ERROR_MOTOR STATE -----
+    else if (drive_motor_current_state == DRIVE_MOTOR_ERROR) {
+        // Transition to STOP (error cleared and vehicle stopped)
+        if (drive_motor_error_status == false && drive_motor_current_speed == 0) {
+            drive_motor_current_state = DRIVE_MOTOR_STOP;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        // Transition to STOPPING (error cleared but vehicle still moving)
+        if (drive_motor_error_status == false && drive_motor_current_speed > 0) {
+            drive_motor_current_state = DRIVE_MOTOR_STOPPING;
+            return DRIVE_MOTOR_STATE_CHANGED;
+        }
+        
+        // Still in error state - remain in ERROR_MOTOR
+        drive_motor_current_state = DRIVE_MOTOR_ERROR;
+        return DRIVE_MOTOR_STATE_NO_CHANGE;
+    }
+    
+    return DRIVE_MOTOR_UNKNOWN_STATE;  // No state change
+}
+
+
+// ==============================================================================
+// STATE IMPLEMENTER / ACTUATOR
+// ==============================================================================
+
+// Execute state actions when update_state() returns true
+void ImplementDriveMotorState() {
+    /*
+    Executes the actions required for the current state
+    */
+    
+    if (drive_motor_current_state == DRIVE_MOTOR_STOP) {
+        // ===== STOP STATE =====
+        drive_motor_set_speed = 0;
+        add_log("Stopping the bot.");
+    }
+    
+    
+    else if (drive_motor_current_state == DRIVE_MOTOR_STOPPING) {
+        // ===== STOPPING STATE =====
+        drive_motor_set_speed = 0;
+        add_log("Stopping the bot.");
+    }
+    
+    
+    else if (drive_motor_current_state == DRIVE_MOTOR_RUNNING) {
+        // ===== RUNNING STATE =====
+        drive_motor_set_speed = permitted_edge_speed;
+        drive_motor_current_direction = DRIVE_MOTOR_FORWARD; // Reset current direction
+        add_log("Running the bot at speed: " + drive_motor_set_speed);
+    }
+    
+    
+    else if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
+        // ===== SWEEPING COLUMN STATE =====
+        
+        // Toggle Direction
+        if (drive_motor_current_direction == DRIVE_MOTOR_FORWARD) {
+            drive_motor_current_direction = DRIVE_MOTOR_REVERSE;
+        }
+        else if (drive_motor_current_direction == DRIVE_MOTOR_REVERSE) {
+            drive_motor_current_direction = DRIVE_MOTOR_FORWARD;
+        }
+        
+        // Set Direction Flag
+        if (drive_motor_current_direction == DRIVE_MOTOR_FORWARD) {
+            drive_motor_direction_value = 1;
+        }
+        else if (drive_motor_current_direction == DRIVE_MOTOR_REVERSE) {
+            drive_motor_direction_value = -1;
+        }
+        
+        // Set speed with direction
+        drive_motor_set_speed = drive_motor_sweep_speed * drive_motor_direction_value;
+        add_log("Sweeping column at speed: " + String(drive_motor_sweep_speed) + " in direction: " + String(drive_motor_direction_value));
+    }
+    
+    
+    else if (drive_motor_current_state == DRIVE_MOTOR_ERROR) {
+        // ===== ERROR_MOTOR STATE =====
+        drive_motor_set_speed = 0;
+        add_log("Drive motor error detected! Halting the bot.");
+    }
+}
 
 void setup() {
   MCPConfig();
@@ -1015,33 +633,17 @@ void setup() {
     "debug_logging",
     10000,
     NULL,
-    1,
+    2,
     &httpDebugLog,
-    0);
-  xTaskCreatePinnedToCore(
-    API_TASK,
-    "api_task",
-    4096,
-    NULL,
-    1,
-    &apiTask,
     0);
   CANConfig();
   MotorConfig();
-  ServoConfig();
   LoadDiverterConfig();
-  CloseFlap();
   Beep();
-  DiverterTest();
-  previousDirection = 1;
-  diverterDirection = 1;
   delay(1000);
-  actualSetSpeed = S2;
-  setSpeed = actualSetSpeed;
-  previousSetSpeed = S2;
-  setTagetVelocity(setSpeed);
+  drive_motor_set_speed = S0_5;  // Initial speed set to 0.5 m/s
   delay(500);
-  Serial.println("Bot: " + String(BOT_ID) + " Code: " + CODE_ID);
+  Serial.println("Bot: " + String(BOT_ID) + " Code: " + FIRMWARE_ID);
   printFileName();
   add_log("Starting the bot!");
   xTaskCreatePinnedToCore(
@@ -1049,8 +651,17 @@ void setup() {
     "sensor_reading_task",
     10000,
     NULL,
-    2,
+    5,
     &sensorReadingTask,
+    1);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  xTaskCreatePinnedToCore(
+    ACTUATION_TASK,
+    "actuation_task",
+    10000,
+    NULL,
+    4,
+    &actuationTask,
     1);
 }
 
@@ -1058,188 +669,40 @@ void setup() {
 void SENSOR_READING_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(1 / portTICK_PERIOD_MS);
-    ReadStationViaPhotoDiode();  // Function to read the analog values from the 3 photo diodes and assign a digital value depending upon the analog value is greeater than threshold or not, assign 1 if value greater than threshold upper limit, 0 is value lower than lower limit
+    // Read TI/CI sensors and process column detection
+    String combo = ReadSensorCombo();
+    ProcessColumnDetection(combo);
+    HandleColumnDecisions();
 
-    String stationCodeMain = GetStationCodeFromDataReadByStationSensor(); // generate the full station code in string format based on the columns read.
-
-    if (stationCodeMain != "" && stationCodeMain.length() == 9) { // If station reading is complete only then function will be run, 2 conditions must be satisfied for station reading to be complete, all 3 columns must be read, only then length of stationcode string will be 9, also stationCode must not be empty for station reading to be complete
-      portENTER_CRITICAL(&currentStationMux);
-      currentStation = TransformStationCodeIntoStationId(stationCodeMain);
-      portEXIT_CRITICAL(&currentStationMux);
-      add_log("Current station: " + currentStation);
-      if (CheckStationValidity(stationCodeMain)) {
-        // portENTER_CRITICAL(&diverterDirectionMux);
-        // changeDirection = true;
-        // diverterDirection = GetDirectionFromStationId(currentStation);
-        // portEXIT_CRITICAL(&diverterDirectionMux);
-        // add_log("Diverter direction changed to " + String(diverterDirection));
-        if (!localisationFlag) {
-          if (expectedStation != currentStation) {
-            errorCode = 3;
-            errorMode = true;
-            firstTimeError = true;
-          }
-        }
-        else {
-          localisationFlag = false;
-        }
-        if (!errorMode) {
-          // actualSetSpeed = GetSetSpeedAsPerStation(currentStation);
-          // portENTER_CRITICAL(&setSpeedMux);
-          // setSpeed = actualSetSpeed;
-          // portEXIT_CRITICAL(&setSpeedMux);
-          // if (currentStation == "I12") {
-          //   startColumnCounter = true;
-          //   add_log("Slow down made true because of I12");
-          //   slowDownFlag = true;
-          // }
-
-          if (currentStation == "I11") {
-            StageFlap();
-            stopWhileStaging = true;
-          }
-
-          if(currentStation == dropoffStation) {
-            OpenFlap();
-            closingFlap = true;
-            startClosingTime = millis();
-            // dropoffStation = "X";
-            if (dropoffStation == "D18") {
-              updateParcelDroppedInTheDumpAPIFlag = true;
-            } else {
-              updateParcelDroppedAPIFlag = true;
-            }
-          }
-          expectedStation = GetExpectedStationFromStationId(currentStation);
-        }
-      } else {
-        add_log("Invalid station code: " + stationCodeMain);
-        errorCode = 4;
-        errorMode = true;
-        firstTimeError = true;
-      }
-    }
-
-    // ---------------------------------------------------------------- Infeed Controller --------------------------------------------------------
-    if (columnDetected) {
-      if(!previousCIState) {
-        if (startColumnCounter) {
-          columnCounter++;
-          if(columnCounter >= 2) {
-            beepFlag = true;
-            add_log("Actual speed changed after 2 columns");
-            actualSetSpeed = S1;
-            startColumnCounter = false;
-            columnCounter = 0;
-            infeedDetected = false;
-            startInfeedAPIColumnCounter = true;
-          }
-        }
-      }
-    }
-    previousCIState = columnDetected;
-    // -------------------------------------------------------------------------------------------------------------------------------------------
-
-    // ----------------------------------------------------------- Destination Controller --------------------------------------------------------
-    if (columnDetected) {
-      if(!previousCIStateForInfeedAPI) {
-        if (startInfeedAPIColumnCounter) {
-          infeedAPIcolumnCounter++;
-          if(infeedAPIcolumnCounter >= 10) {
-            getDestinationAPIFlag = true;
-            infeedAPIcolumnCounter = 0;
-            startInfeedAPIColumnCounter = false;
-            // doBeep = true;
-          }
-        }
-      }
-    }
-    previousCIStateForInfeedAPI = columnDetected;
-    // -------------------------------------------------------------------------------------------------------------------------------------------
-
-    // Start closing the flaps after threshold time of detecting the drop-off
-    if (closingFlap && millis() - startClosingTime >= 2000) {
-      CloseFlap();
-      closingFlap = false;
-      stopWhileClosing = true;
+    if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
+      add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
+      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: " + 
+                String(column_detected_in_sweep));
+      ImplementDriveMotorState();
     }
   }
 }
 
-void loop() {
-  // unsigned long loopStartTime = micros();
-  // unsigned long latency = micros();
-
-  if (errorMode) {
-    haltMovement();
-    ErrorHandling();
-  }
-
-  if (changeDirection) {
-    add_log("Changing diverter to " + String(diverterDirection));
-    SetDiverter(diverterDirection);
-    changeDirection = false;
-    diverterCheckStartTime = millis();
-    diverterCheckFlag = true;
-  }
-
-  if (previousSetSpeed != setSpeed && !errorMode) {
-    add_log("Changing speed to " + String(setSpeed));
-    if (setSpeed != 0) {
-      setTagetVelocity(setSpeed);
-      // if (setSpeed == S0_05) slowDownFlag = true;
-      // else {
-      //   slowDownFlag = false;
-      //   stopBotFlag = false;
-      // }
-    } else {
-      haltMovement();
-      // stopBotFlag = true;
-    }
-    previousSetSpeed = setSpeed;
-  }
-
-  if (checkForCorrection && !errorMode) {
-    if (stopBotFlag && getVelocityActualValueAveraged() == 0) {
-      add_log("CORRECTION!");
-      portENTER_CRITICAL(&setSpeedMux);
-      setSpeed = S0_05;
-      portEXIT_CRITICAL(&setSpeedMux);
-      stopBotFlag = false;
-    }
-    portENTER_CRITICAL(&checkForCorrectionMux);
-    checkForCorrection = false;
-    portEXIT_CRITICAL(&checkForCorrectionMux);
-  }
-
-  if (checkForStopCondition && !errorMode) {
-    // Case: If condition true then bot has achieved MINIMAL_SPEED
-    if (getVelocityActualValueAveraged() < 30) {
-      // Case: If condition true then bot has not already stopped
-      if (!stopBotFlag) {
-        add_log("STOPPING BCZ TRAFFIC");
-        // Stop the bot
-        portENTER_CRITICAL(&setSpeedMux);
-        setSpeed = 0;
-        portEXIT_CRITICAL(&setSpeedMux);
-        stopBotFlag = true;
-        slowDownFlag = true;
+void ACTUATION_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    // Update motor speed if changed
+    if (drive_motor_set_speed != drive_motor_previous_set_speed) {
+      if (drive_motor_set_speed != 0) {
+        setTagetVelocity(drive_motor_set_speed);
+      } else {
+        haltMovement();
       }
+      drive_motor_previous_set_speed = drive_motor_set_speed;
     }
-    portENTER_CRITICAL(&checkForStopConditionMux);
-    checkForStopCondition = false;
-    portEXIT_CRITICAL(&checkForStopConditionMux);
-  }
 
-  if (beepFlag) {
-    Beep();
-    beepFlag = false;
+    // Monitor drive motor current speed
+    drive_motor_current_speed = getVelocityActualValueAveraged();
   }
+}
 
-  if (millis() - diverterCheckStartTime > 300 && diverterCheckFlag && currentStation != "I1") {
-    CheckDiverter();
-    diverterCheckFlag = false;
-  }
+void loop() {
+  // Empty loop as tasks handle functionality
 }
 
 // Calculate health status based on majority frame count
@@ -1304,7 +767,7 @@ String HealthToString(HealthStatus health) {
 }
 
 // Analyze column detection and report health
-HealthStatus AnalyzeColumnHealth() {
+HealthStatus AnalyzeWTMColumnHealth() {
   if (detectedColumnCode == "") return SAFE;
   
   // Total frames during column reading (excluding 00 exit confirmation frames)
@@ -1333,44 +796,25 @@ HealthStatus AnalyzeColumnHealth() {
   
   // Calculate health
   // Majority: Use static threshold (DEFAULT_COLUMN_FRAME_THRESHOLD or maxCount)
-  majorityHealth = CalculateMajorityHealth(majorityCount, DEFAULT_COLUMN_FRAME_THRESHOLD);
+  majorityHealthWTM = CalculateMajorityHealth(majorityCount, DEFAULT_COLUMN_FRAME_THRESHOLD);
   
   // Minority: Use total frames captured from previous empty space to current empty space
-  minorityHealth = CalculateMinorityHealth(minorityTotal, totalFramesBetweenSpaces);
-  overallHealth = GetWorstHealth(majorityHealth, minorityHealth);
+  minorityHealthWTM = CalculateMinorityHealth(minorityTotal, totalFramesBetweenSpaces);
+  overallHealthWTM = GetWorstHealth(majorityHealthWTM, minorityHealthWTM);
   
   // Compact log for memory efficiency
-  add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealth));
-  return overallHealth;
+  add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
+  return overallHealthWTM;
 }
 
 void printFileName() {
   Serial.println(__FILE__);
 }
 
-void ServoConfig() {
-  sm.begin(&Serial2, 115200);
-  sm.setTimeOut(100);
-  Serial2.begin(115200, SERIAL_8N1, 25, 32);
-  sm.IncreaseLimit(2, 5000);
-}
-
 // Function to load values from NVM
 void LoadDiverterConfig() {
   prefs.begin("diverter", true);
   BOT_ID = prefs.getString("BotId", "Bx");
-
-  front_diverter_left_limit = prefs.getInt("front_left_lim", 1994);
-  front_diverter_right_limit = prefs.getInt("front_right_lim", 2525);
-  front_diverter_tolerance = prefs.getInt("front_tol", 106);
-  front_diverter_left_thresold = prefs.getInt("front_left_thr", 2100);
-  front_diverter_right_thresold = prefs.getInt("front_right_thr", 2419);
-  
-  rear_diverter_left_limit = prefs.getInt("rear_left_lim", 2936);
-  rear_diverter_right_limit = prefs.getInt("rear_right_lim", 2387);
-  rear_diverter_tolerance = prefs.getInt("rear_tol", 109);
-  rear_diverter_left_thresold = prefs.getInt("rear_left_thr", 2827);
-  rear_diverter_right_thresold = prefs.getInt("rear_right_thr", 2496);
   prefs.end();
   Serial.println("Diverter config loaded from NVM.");
 }
@@ -1386,17 +830,17 @@ void MCPConfig() {
 // Function to make ahardware beep for 250 ms
 void Beep() {
   digitalWrite(BUZZER, HIGH);
-  mcp.digitalWrite(PANEL_LED_PIN, HIGH);
+  // mcp.digitalWrite(PANEL_LED_PIN, HIGH);
   delay(250);
   digitalWrite(BUZZER, LOW);
-  mcp.digitalWrite(PANEL_LED_PIN, LOW);
+  // mcp.digitalWrite(PANEL_LED_PIN, LOW);
 }
 
 // Logger Function which will run as RTOS task
 void HTTP_DEBUG_LOGGER(void* pvParameters) {
   while (true) {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
-    if (debugLoggingString != BOT_ID + " " + CODE_ID + ": ") {
+    if (debugLoggingString != BOT_ID + " " + FIRMWARE_ID + ": ") {
       // Serial.println("Sending logs!");
       // Serial.println(String(WiFi.status()));
       int httpCode = -1;
@@ -1408,7 +852,7 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
         httpCode = HTTP_CODE_OK;
       }
       if (httpCode == HTTP_CODE_OK) {
-        debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
+        debugLoggingString = BOT_ID + " " + FIRMWARE_ID + ": ";
       }
     }
   }
@@ -1417,38 +861,6 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
 // Function to add logs into the log string
 void add_log(String log) {
   debugLoggingString += " | " + log;
-}
-
-// Function to montior the loop time and memory usage of the controller
-void PerformanceMonitor() {
-  // RAM monitoring
-  size_t freeHeap = ESP.getFreeHeap();   // Free heap memory
-  size_t totalHeap = ESP.getHeapSize();  // Total heap memory
-  float ramUsage = 100.0 - ((float)freeHeap / totalHeap * 100.0);
-  if (ramUsage > 70) {
-    add_log("Ram usage has exceeded 70%!");
-    add_log("Total ram available (b): " + String(totalHeap));
-    add_log("RAM used (b): " + String(totalHeap - freeHeap));
-    add_log("Free space left (b): " + String(freeHeap));
-    add_log("RAM used (%): " + String(ramUsage) + " %");
-  }
-
-  // Loop time monitoring
-  unsigned long loopTime = micros() - loopStartTime;
-  if (numsOfIteration == 10000) {
-    // add_log("Core 1 Loop Time (micros): " + String(loopTime));
-    // add_log("RAM used (b): " + String(totalHeap - freeHeap));
-    numsOfIteration = 0;
-  }
-  if (loopTime > maxLoopTime) {
-    maxLoopTime = loopTime;
-    add_log("Core 1 New Max. Loop Time (micros): " + String(maxLoopTime));
-  }
-  if (totalHeap - freeHeap > maxMemoryUsed) {
-    maxMemoryUsed = totalHeap - freeHeap;
-    add_log("New Max. Memory Usage (b): " + String(totalHeap - freeHeap));
-  }
-  numsOfIteration++;
 }
 
 // Function to connect controller to network
@@ -1463,22 +875,9 @@ void WiFiConfig() {
 
 // Setup the pin configuration
 void PinConfig() {
-  pinMode(COLUMN_INDICATOR_SENSOR, INPUT);       // Traffic indicator pin config
-  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT);      // Column indicator pin config
-  pinMode(EMG_PIN, OUTPUT);
+  pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);       // Traffic indicator pin config
+  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);      // Column indicator pin config
   pinMode(BUZZER, OUTPUT);
-  mcp.pinMode(PANEL_LED_PIN, OUTPUT);
-  mcp.pinMode(PANEL_LED_BUTTON, INPUT_PULLUP);
-  mcp.pinMode(AFC_TOP_LSW_PIN, INPUT_PULLUP);
-  mcp.pinMode(AFC_BOTTOM_LSW_PIN, INPUT_PULLUP);
-
-  // GPIO command outputs to Secondary
-  pinMode(AFC_PIN_1, OUTPUT);
-  pinMode(AFC_PIN_2, OUTPUT);
-
-  digitalWrite(EMG_PIN, HIGH);
-  digitalWrite(AFC_PIN_1, LOW);
-  digitalWrite(AFC_PIN_2, LOW);
 }
 
 // Function to configure the CAN protocol
@@ -1503,96 +902,4 @@ void MotorConfig() {
   setMotionProfileType(1);
   disable();
   enable();
-}
-
-void GetDestinationAndJourneyPath() {
-  String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=MyntraSingleScan&retries=0&sectionId=S1";
-  int httpCode = 0;
-  _http.begin(url);
-  add_log("API call!");
-  httpCode = _http.GET();
-  String response = "";
-  if (httpCode == HTTP_CODE_OK) {
-    response = _http.getString();
-  } else {
-    add_log(_http.getString());
-  }
-  _http.end();
-  
-  if (response == "") {
-    dropoffStation = "D18";
-  } else {
-    int destinationIndex = response.indexOf('-');
-    dropoffStation = response.substring(0, destinationIndex);
-  }
-}
-
-void UpdateParcelDropped() {
-  String url = DMS_URL_PREFIX + "UpdateSuccessfulDropForBot?botId=" + BOT_ID;
-  int httpCode = 0;
-  _http.begin(url);
-  add_log("Update API call!");
-  httpCode = _http.PUT(url);
-  String response = "";
-  if (httpCode == HTTP_CODE_OK) {
-    response = _http.getString();
-  } else {
-    add_log(_http.getString());
-  }
-  _http.end();
-}
-
-void UpdateParcelDroppedInTheDump() {
-  String url = DMS_URL_PREFIX + "UpdateDumpDropForBot?botId=" + BOT_ID;
-  int httpCode = 0;
-  _http.begin(url);
-  add_log("API call!");
-  httpCode = _http.PUT(url);
-  String response = "";
-  if (httpCode == HTTP_CODE_OK) {
-    response = _http.getString();
-  } else {
-    add_log(_http.getString());
-  }
-  _http.end();
-}
-
-void ClearInfeedStation() {
-  String url = DMS_URL_PREFIX + "ClearInfeedStations?infeedStationId=I1";
-  int httpCode = 0;
-  _http.begin(url);
-  while (httpCode != HTTP_CODE_OK) {
-    httpCode = _http.PUT(url);
-    delay(100);
-  }
-  _http.end();
-}
-
-// Logger Function which will run as RTOS task
-void API_TASK(void* pvParameters) {
-  while (true) {
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    if (getDestinationAPIFlag) {
-      GetDestinationAndJourneyPath();
-      clearInfeedAPIFlag = true;
-      getDestinationAPIFlag = false;
-    }
-
-    if (clearInfeedAPIFlag) {
-      ClearInfeedStation();
-      clearInfeedAPIFlag = false;
-    }
-
-    if (updateParcelDroppedInTheDumpAPIFlag) {
-      UpdateParcelDroppedInTheDump();
-      updateParcelDroppedInTheDumpAPIFlag = false;
-      dropoffStation = "X";
-    }
-
-    if (updateParcelDroppedAPIFlag) {
-      UpdateParcelDropped();
-      updateParcelDroppedAPIFlag = false;
-      dropoffStation = "X";
-    }
-  }
 }
