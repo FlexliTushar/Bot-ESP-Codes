@@ -75,7 +75,7 @@ enum DriveMotorStateOutput {
 };
 
 // Constant variables
-const String CODE_ID = "d513";
+const String CODE_ID = "d514";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
@@ -182,7 +182,8 @@ int current_position_front_servo = 0;
 int current_position_rear_servo = 0;
 
 TaskHandle_t readingSensorAndUpdateStateTask;
-TaskHandle_t actuationTask;
+TaskHandle_t actuationDriveMotorTask;
+TaskHandle_t actuationDiverterTask;
 
 // ==============================================================================
 // DIVERTER STATE MACHINE DEFINITIONS
@@ -228,12 +229,14 @@ int right_position_tolerance = 100;  // +/- tolerance for right position
 // Shared variables
 bool global_error_status = false;
 DiverterDirection diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
-volatile DiverterPosition current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
+DiverterPosition current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
+
+DiverterDirection diverter_track_edge_direction_core0 = DIVERTER_DIRECTION_RIGHT;
 
 // State machine variables
 DiverterState diverter_current_state = DIVERTER_STOP;
 DiverterState diverter_previous_state = DIVERTER_STOP;
-volatile bool error_diverter_status = false;
+bool error_diverter_status = false;
 bool diverter_set_torque_flag = true;
 bool prev_diverter_set_torque_flag = true;
 int front_diverter_set_position_value = -1;
@@ -241,6 +244,11 @@ int rear_diverter_set_position_value = -1;
 int prev_front_diverter_set_position_value = -1;
 int prev_rear_diverter_set_position_value = -1;
 
+int front_diverter_set_position_value_core0 = -1;
+int rear_diverter_set_position_value_core0 = -1;
+
+bool diverter_set_torque_flag_core0 = true;
+DiverterPosition current_diverter_position_high_level_core0 = DIVERTER_POSITION_UNKNOWN;
 
 // Actual position from encoder
 int front_diverter_current_position = -1;
@@ -255,6 +263,9 @@ const unsigned long TOGGLE_INTERVAL = 10000;  // 10 s
 portMUX_TYPE current_diverter_position_high_level_mux = portMUX_INITIALIZER_UNLOCKED;
 portMUX_TYPE error_diverter_status_mux = portMUX_INITIALIZER_UNLOCKED;
 portMUX_TYPE diverter_set_position_value_mux = portMUX_INITIALIZER_UNLOCKED;
+
+SemaphoreHandle_t xdiverterErrorStatus;
+SemaphoreHandle_t xdiverterTrackEdgeDirection;
 
 // ==============================================================================
 // HELPER FUNCTIONS
@@ -634,29 +645,24 @@ void UpdateDiverterPositionHighLevel() {
   if (front_diverter_current_position >= (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position <= front_diverter_right_limit &&
   rear_diverter_current_position <= (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position >= rear_diverter_right_limit) {
 
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_RIGHT;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+    current_diverter_position_high_level_core0 = DIVERTER_POSITION_RIGHT;
   }
 
   else if (front_diverter_current_position >= front_diverter_left_limit && front_diverter_current_position <= (front_diverter_left_thresold + front_diverter_tolerance)  &&
   rear_diverter_current_position <= rear_diverter_left_limit && rear_diverter_current_position >= (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_LEFT;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+
+    current_diverter_position_high_level_core0 = DIVERTER_POSITION_LEFT;
   }
 
   else if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance) &&
   rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_INTERIM;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+
+    current_diverter_position_high_level_core0 = DIVERTER_POSITION_INTERIM;
   }
 
   else {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+
+    current_diverter_position_high_level_core0 = DIVERTER_POSITION_UNKNOWN;
   }
 }
 
@@ -823,17 +829,13 @@ void UpdateDiverterActuatorInputVariables() {
     // ===== SWITCHING STATE =====
     diverter_set_torque_flag = true;  // Enable torque for movement
     if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
-      portENTER_CRITICAL(&diverter_set_position_value_mux);
       front_diverter_set_position_value = front_diverter_left_thresold;
       rear_diverter_set_position_value = rear_diverter_left_thresold;
-      portEXIT_CRITICAL(&diverter_set_position_value_mux);
       // add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT) + " - moving to front threshold: " + String(front_diverter_left_thresold) + " and rear threshold: " + String(rear_diverter_left_thresold));
     }
     else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
-      portENTER_CRITICAL(&diverter_set_position_value_mux);
       front_diverter_set_position_value = front_diverter_right_thresold;
       rear_diverter_set_position_value = rear_diverter_right_thresold;
-      portEXIT_CRITICAL(&diverter_set_position_value_mux);
       // add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_RIGHT) + " - moving to front threshold: " + String(front_diverter_right_thresold) + " and rear threshold: " + String(rear_diverter_right_thresold));
     }
   }
@@ -859,7 +861,10 @@ void UpdateDiverterActuatorInputVariables() {
 void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(1 / portTICK_PERIOD_MS);  // 10ms cycle time
-    global_error_status = error_diverter_status || drive_motor_error_status;
+    if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+      global_error_status = error_diverter_status || drive_motor_error_status;
+      xSemaphoreGive(xdiverterErrorStatus);
+    }
 
     // Read TI/CI sensors and process column detection
     String combo = ReadSensorCombo();
@@ -873,86 +878,96 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
       ImplementDriveMotorState();
     }
     
-    DiverterStateChangeOptions stateChange = UpdateDiverterState();
-    if (stateChange != DIVERTER_STATE_NO_CHANGE) Serial.println(stateChange);
-    if (stateChange == DIVERTER_STATE_CHANGED) {
-      add_log("State changed to: " + DiverterStateToString(diverter_current_state) + " from " + DiverterStateToString(diverter_previous_state));
-      // add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + DiverterDirectionToString(diverter_track_edge_direction) + ", Pos_HL: " + DiverterPositionToString(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
-      // add_log("Front current position: " + String(front_diverter_current_position) + ", Rear current position: " + String(rear_diverter_current_position));
-      UpdateDiverterActuatorInputVariables();
-    } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
-      add_log("Diverter State Machine in UNEXPECTED CONDITION!");
+    if (xSemaphoreTake(xdiverterTrackEdgeDirection, portMAX_DELAY) == pdTRUE) {
+      current_diverter_position_high_level = current_diverter_position_high_level_core0;
+      DiverterStateChangeOptions stateChange = UpdateDiverterState();
+      if (stateChange == DIVERTER_STATE_CHANGED) {
+        add_log("State changed to: " + DiverterStateToString(diverter_current_state) + " from " + DiverterStateToString(diverter_previous_state));
+        // add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + DiverterDirectionToString(diverter_track_edge_direction) + ", Pos_HL: " + DiverterPositionToString(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
+        // add_log("Front current position: " + String(front_diverter_current_position) + ", Rear current position: " + String(rear_diverter_current_position));
+        UpdateDiverterActuatorInputVariables();
+      } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
+        add_log("Diverter State Machine in UNEXPECTED CONDITION!");
+      }
+      xSemaphoreGive(xdiverterTrackEdgeDirection);
     }
   }
 }
 
 // Actuation Task
-void ACTUATION_TASK(void* pvParameters) {
+void ACTUATION_DIVERTER_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
     // Update motor speed if changed
-    if (!diverter_set_torque_flag ) {
+    
+    if (!diverter_set_torque_flag_core0 ) {
       if (prev_diverter_set_torque_flag)
       {
         delay(1);
         sm.EnableTorque(FRONT_SERVO, DISABLE);
         if (sm.getLastError()) {
           // add_log("Front torque disabling communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
         delay(1);
         sm.EnableTorque(REAR_SERVO, DISABLE);
         if (sm.getLastError()) {
           // add_log("Rear torque disabling communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
       }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
-      if (front_diverter_set_position_value != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
+    } else if (diverter_track_edge_direction_core0 == DIVERTER_DIRECTION_RIGHT) {
+      if (front_diverter_set_position_value_core0 != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
         delay(1);
-        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value_core0, 100);
         if (sm.getLastError()) {
           // add_log("Front position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
       }
 
-      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
+      if (rear_diverter_set_position_value_core0 != -1 && rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
         delay(1);
-        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value_core0, 100);
         if (sm.getLastError()) {
           // add_log("Rear position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
       }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
-      if (front_diverter_set_position_value != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
+    } else if (diverter_track_edge_direction_core0 == DIVERTER_DIRECTION_LEFT) {
+      if (front_diverter_set_position_value_core0 != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
         delay(1);
-        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value_core0, 100);
         if (sm.getLastError()) {
           // add_log("Front position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
       }
 
-      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+      if (rear_diverter_set_position_value_core0 != -1 && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
         delay(1);
-        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value_core0, 100);
         if (sm.getLastError()) {
           // add_log("Rear position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
+          if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+            error_diverter_status = true;
+            xSemaphoreGive(xdiverterErrorStatus);
+          }
         }
       }
     }
@@ -961,21 +976,35 @@ void ACTUATION_TASK(void* pvParameters) {
     front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
     if (sm.getLastError()) {
       // add_log("Front position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
+      if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+        error_diverter_status = true;
+        xSemaphoreGive(xdiverterErrorStatus);
+      }
     }
     delay(1);
     rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
     if (sm.getLastError()) {
       // add_log("Rear position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
+      if (xSemaphoreTake(xdiverterErrorStatus, portMAX_DELAY) == pdTRUE) {
+        error_diverter_status = true;
+        xSemaphoreGive(xdiverterErrorStatus);
+      }
     }
+    if (xSemaphoreTake(xdiverterTrackEdgeDirection, portMAX_DELAY) == pdTRUE) {
+      UpdateDiverterPositionHighLevel();
+      diverter_track_edge_direction_core0 = diverter_track_edge_direction;
+      diverter_set_torque_flag_core0 = diverter_set_torque_flag;
+      front_diverter_set_position_value_core0 = front_diverter_set_position_value;
+      rear_diverter_set_position_value_core0 = rear_diverter_set_position_value;
+      xSemaphoreGive(xdiverterTrackEdgeDirection);
+    }
+  }
+}
 
-    UpdateDiverterPositionHighLevel();
-
+// Actuation Task
+void ACTUATION_DRIVE_MOTOR_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     // Update motor speed if changed
     if (drive_motor_set_speed != drive_motor_previous_set_speed) {
       if (drive_motor_set_speed != 0) {
@@ -999,52 +1028,67 @@ void ACTUATION_TASK(void* pvParameters) {
 // ==============================================================================
 
 void setup() {
-    MCPConfig();
-    PinConfig();
-    delay(3000);
-    Serial.begin(115200);
-    WiFiConfig();
-    xTaskCreatePinnedToCore(
-        HTTP_DEBUG_LOGGER,
-        "debug_logging",
-        10000,
-        NULL,
-        2,
-        &httpDebugLog,
-        0);
-    ServoConfig();
-    CANConfig();
-    MotorConfig();
-    LoadDiverterConfig();
-    Beep();
-    delay(1000);
-    
-    Serial.println("Bot: " + String(BOT_ID) + " Code: " + CODE_ID);
-    printFileName();
-    add_log("Starting test!");
-    
-    // Create RTOS tasks
-    xTaskCreatePinnedToCore(
-        READING_SENSOR_AND_UPDATE_STATE_TASK,
-        "reading_sensor_and_update_state_task",
-        10000,
-        NULL,
-        4,
-        &readingSensorAndUpdateStateTask,
-        1);
-    
-    vTaskDelay(pdMS_TO_TICKS(20));
-    
-    xTaskCreatePinnedToCore(
-        ACTUATION_TASK,
-        "actuation_task",
-        10000,
-        NULL,
-        5,
-        &actuationTask,
-        1);
-    
-    last_toggle_time = millis();
+  Serial.begin(115200);
+  xdiverterErrorStatus = xSemaphoreCreateBinary();
+  xSemaphoreGive(xdiverterErrorStatus);
+  xdiverterTrackEdgeDirection = xSemaphoreCreateBinary();
+  xSemaphoreGive(xdiverterTrackEdgeDirection);
+  MCPConfig();
+  PinConfig();
+  delay(3000);
+  WiFiConfig();
+  xTaskCreatePinnedToCore(
+      HTTP_DEBUG_LOGGER,
+      "debug_logging",
+      10000,
+      NULL,
+      2,
+      &httpDebugLog,
+      0);
+  ServoConfig();
+  CANConfig();
+  MotorConfig();
+  LoadDiverterConfig();
+  Beep();
+  delay(1000);
+  
+  Serial.println("Bot: " + String(BOT_ID) + " Code: " + CODE_ID);
+  printFileName();
+  add_log("Starting test!");
+  
+  // Create RTOS tasks
+  xTaskCreatePinnedToCore(
+      READING_SENSOR_AND_UPDATE_STATE_TASK,
+      "reading_sensor_and_update_state_task",
+      8000,
+      NULL,
+      5,
+      &readingSensorAndUpdateStateTask,
+      1);
+  
+  vTaskDelay(pdMS_TO_TICKS(20));
+  
+  xTaskCreatePinnedToCore(
+    ACTUATION_DRIVE_MOTOR_TASK,
+    "actuation_drive_motor_task",
+    5000,
+    NULL,
+    4,
+    &actuationDriveMotorTask,
+    1);
+
+  //  vTaskDelay(pdMS_TO_TICKS(20));
+  
+  // xTaskCreatePinnedToCore(
+  //   ACTUATION_DIVERTER_TASK,
+  //   "actuation_drive_motor_task",
+  //   1000,
+  //   NULL,
+  //   5,
+  //   &actuationDiverterTask,
+  //   0);
+  
+  last_toggle_time = millis();
 }
 
 void loop() {

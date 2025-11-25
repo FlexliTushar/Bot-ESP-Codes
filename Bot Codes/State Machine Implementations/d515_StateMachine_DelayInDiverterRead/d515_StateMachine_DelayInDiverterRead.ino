@@ -75,7 +75,7 @@ enum DriveMotorStateOutput {
 };
 
 // Constant variables
-const String CODE_ID = "d513";
+const String CODE_ID = "d515";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
@@ -183,6 +183,9 @@ int current_position_rear_servo = 0;
 
 TaskHandle_t readingSensorAndUpdateStateTask;
 TaskHandle_t actuationTask;
+
+unsigned long lastReadTime = 0;
+unsigned long lastWriteTime = 0;
 
 // ==============================================================================
 // DIVERTER STATE MACHINE DEFINITIONS
@@ -911,7 +914,7 @@ void ACTUATION_TASK(void* pvParameters) {
           portEXIT_CRITICAL(&error_diverter_status_mux);
         }
       }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
+    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT && millis() - lastWriteTime >= 100) {
       if (front_diverter_set_position_value != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
         delay(1);
         sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
@@ -933,7 +936,8 @@ void ACTUATION_TASK(void* pvParameters) {
           portEXIT_CRITICAL(&error_diverter_status_mux);
         }
       }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
+      lastWriteTime = millis();
+    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT && millis() - lastWriteTime >= 100) {
       if (front_diverter_set_position_value != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
         delay(1);
         sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
@@ -955,23 +959,28 @@ void ACTUATION_TASK(void* pvParameters) {
           portEXIT_CRITICAL(&error_diverter_status_mux);
         }
       }
+      lastWriteTime = millis();
     }
     prev_diverter_set_torque_flag = diverter_set_torque_flag;
-    delay(1);
-    front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
-    if (sm.getLastError()) {
-      // add_log("Front position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
-    }
-    delay(1);
-    rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
-    if (sm.getLastError()) {
-      // add_log("Rear position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
+
+    if (millis() - lastReadTime >= 100) {
+      delay(1);
+      front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
+      if (sm.getLastError()) {
+        // add_log("Front position read communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+      delay(1);
+      rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
+      if (sm.getLastError()) {
+        // add_log("Rear position read communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+      lastReadTime = millis();
     }
 
     UpdateDiverterPositionHighLevel();
@@ -1035,20 +1044,126 @@ void setup() {
     
     vTaskDelay(pdMS_TO_TICKS(20));
     
-    xTaskCreatePinnedToCore(
-        ACTUATION_TASK,
-        "actuation_task",
-        10000,
-        NULL,
-        5,
-        &actuationTask,
-        1);
+    // xTaskCreatePinnedToCore(
+    //     ACTUATION_TASK,
+    //     "actuation_task",
+    //     10000,
+    //     NULL,
+    //     5,
+    //     &actuationTask,
+    //     1);
     
     last_toggle_time = millis();
 }
 
 void loop() {
+  // Update motor speed if changed
+  if (drive_motor_set_speed != drive_motor_previous_set_speed) {
+    if (drive_motor_set_speed != 0) {
+      String log = setTagetVelocity(drive_motor_set_speed);
+      add_log("Set taget log: " + log);
+    } else {
+      String log = haltMovement();
+      add_log("Halt log: " + log);
+    }
+    add_log("Set speed now: " + String(drive_motor_set_speed));
+    drive_motor_previous_set_speed = drive_motor_set_speed;
+  }
+
+  // Monitor drive motor current speed
+  drive_motor_current_speed = getVelocityActualValueAveraged();
+
   // Empty loop as tasks handle functionality
+  if (!diverter_set_torque_flag ) {
+    if (prev_diverter_set_torque_flag)
+    {
+      delay(1);
+      sm.EnableTorque(FRONT_SERVO, DISABLE);
+      if (sm.getLastError()) {
+        // add_log("Front torque disabling communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+      delay(1);
+      sm.EnableTorque(REAR_SERVO, DISABLE);
+      if (sm.getLastError()) {
+        // add_log("Rear torque disabling communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+    }
+  } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT && millis() - lastWriteTime >= 100) {
+    if (front_diverter_set_position_value != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
+      delay(1);
+      sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+      if (sm.getLastError()) {
+        // add_log("Front position write communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+    }
+
+    if (rear_diverter_set_position_value != -1 && rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
+      delay(1);
+      sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+      if (sm.getLastError()) {
+        // add_log("Rear position write communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+    }
+    lastWriteTime = millis();
+  } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT && millis() - lastWriteTime >= 100) {
+    if (front_diverter_set_position_value != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
+      delay(1);
+      sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+      if (sm.getLastError()) {
+        // add_log("Front position write communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+    }
+
+    if (rear_diverter_set_position_value != -1 && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+      delay(1);
+      sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+      if (sm.getLastError()) {
+        // add_log("Rear position write communication failed!");
+        portENTER_CRITICAL(&error_diverter_status_mux);
+        error_diverter_status = true;
+        portEXIT_CRITICAL(&error_diverter_status_mux);
+      }
+    }
+    lastWriteTime = millis();
+  }
+  prev_diverter_set_torque_flag = diverter_set_torque_flag;
+
+  if (millis() - lastReadTime >= 100) {
+    delay(1);
+    front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
+    if (sm.getLastError()) {
+      // add_log("Front position read communication failed!");
+      portENTER_CRITICAL(&error_diverter_status_mux);
+      error_diverter_status = true;
+      portEXIT_CRITICAL(&error_diverter_status_mux);
+    }
+    delay(1);
+    rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
+    if (sm.getLastError()) {
+      // add_log("Rear position read communication failed!");
+      portENTER_CRITICAL(&error_diverter_status_mux);
+      error_diverter_status = true;
+      portEXIT_CRITICAL(&error_diverter_status_mux);
+    }
+    lastReadTime = millis();
+  }
+
+  UpdateDiverterPositionHighLevel();
 }
 
 // Calculate health status based on majority frame count
