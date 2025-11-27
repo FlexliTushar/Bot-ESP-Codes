@@ -1,4 +1,4 @@
-#define FIRMWARE_VERSION "d513"
+#define FIRMWARE_VERSION "d520"
 /*
   Diverter State Machine Test Sketch
   ====================================
@@ -76,7 +76,7 @@ enum DriveMotorStateOutput {
 };
 
 // Constant variables
-const String CODE_ID = "d513";
+const String CODE_ID = "d520";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
