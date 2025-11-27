@@ -1,5 +1,31 @@
-bool WriteCAN(uint16_t index, uint8_t subindex, uint32_t decimalData) {
+void printFrame(CAN_FRAME *message) {
+  Serial.print(message->id, HEX);
+  Serial.print(" ");
+  // if (message->extended) Serial.print(" X ");
+  // else Serial.print(" S ");
+  // Serial.print(message->length, DEC);
+  // Serial.print(" ");
+  for (int i = 0; i < message->length; i++) {
+    Serial.print(message->data.byte[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
+
+String readFrame(CAN_FRAME *message) {
+  String frame;
+  frame += String(message->id, HEX);
+  frame += " ";
+  for (int i = 0; i < message->length; i++) {
+    frame += String(message->data.byte[i], HEX);
+    frame += " ";
+  }
+  return frame;
+}
+
+void WriteCAN(uint16_t index, uint8_t subindex, uint32_t decimalData) {
   CAN_FRAME txFrame;
+  String log;
   txFrame.rtr = 0;
   txFrame.extended = false;
   txFrame.length = 8;
@@ -21,31 +47,46 @@ bool WriteCAN(uint16_t index, uint8_t subindex, uint32_t decimalData) {
   txFrame.data.uint8[7] = (hexData >> 24) & 0xFF;  // Data [Byte 3]
 
   CAN0.sendFrame(txFrame);
-  
-  // Wait for response and verify it matches our request
-  unsigned long startTime = millis();
-  while (millis() - startTime < 50) {  // 50ms timeout
-    CAN_FRAME response;
-    if (CAN0.read(response)) {
-      if (response.id == 0x581) {
-        // Check if this is an error response (SDO abort)
-        if (response.data.uint8[0] == 0x80) {
-          // SDO abort - extract error code for debugging
-          // uint32_t errorCode = response.data.uint8[4] | (response.data.uint8[5] << 8) | 
-          //                      (response.data.uint8[6] << 16) | (response.data.uint8[7] << 24);
-          return false;  // Communication succeeded but command was rejected
-        }
-        // Check if this is the success response for OUR command
-        if (response.data.uint8[0] == 0x60 &&
-            response.data.uint8[1] == (index & 0xFF) &&
-            response.data.uint8[2] == ((index >> 8) & 0xFF) &&
-            response.data.uint8[3] == subindex) {
-          return true;  // Got acknowledge for correct index/subindex
-        }
-      }
+}
+
+String WriteCANLogging(uint16_t index, uint8_t subindex, uint32_t decimalData) {
+  CAN_FRAME txFrame;
+  String log;
+  String sendFrame;
+  txFrame.rtr = 0;
+  txFrame.extended = false;
+  txFrame.length = 8;
+
+  txFrame.id = 0x601;
+  txFrame.data.uint8[0] = 0x22;  // Write - 0x22
+
+  // Split 16-bit index into low and high bytes
+  txFrame.data.uint8[1] = index & 0xFF;         // Index (Lowebyte)
+  txFrame.data.uint8[2] = (index >> 8) & 0xFF;  // Index (Highbyte)
+
+  txFrame.data.uint8[3] = subindex;  // SubIndex
+
+  // Convert decimal data to hexadecimal and split into bytes (assuming little-endian byte order)
+  uint32_t hexData = decimalData;                  // Store decimal data for conversion
+  txFrame.data.uint8[4] = hexData & 0xFF;          // Data [Byte 0]
+  txFrame.data.uint8[5] = (hexData >> 8) & 0xFF;   // Data [Byte 1]
+  txFrame.data.uint8[6] = (hexData >> 16) & 0xFF;  // Data [Byte 2]
+  txFrame.data.uint8[7] = (hexData >> 24) & 0xFF;  // Data [Byte 3]
+
+  sendFrame = readFrame(&txFrame);
+
+  unsigned long startTime = micros();
+  CAN0.sendFrame(txFrame);
+  CAN0.watchFor();
+  CAN_FRAME message;
+  while (log == "") {
+    if (CAN0.read(message)) {
+      Serial.println("Message : ");
+      log = readFrame(&message);
     }
   }
-  return false;  // Timeout or no matching response
+  log = "Req. Frame: " + sendFrame + " Resp. Frame: " + log + " Time of comm: " + String(micros() - startTime);
+  return log;
 }
 
 void ReadCAN(uint16_t index, uint8_t subindex) {
@@ -93,24 +134,10 @@ void MoveToPosition(long targetPosition, bool absolute, bool immediately) {
   WriteCAN(CONTROLWORD, 0x00, 15);
 }
 
-void printFrame(CAN_FRAME *message) {
-  Serial.print(message->id, HEX);
-  Serial.print(" ");
-  // if (message->extended) Serial.print(" X ");
-  // else Serial.print(" S ");
-  // Serial.print(message->length, DEC);
-  // Serial.print(" ");
-  for (int i = 0; i < message->length; i++) {
-    Serial.print(message->data.byte[i], HEX);
-    Serial.print(" ");
-  }
-  Serial.println();
-}
-
-bool haltMovement() {
-  bool success = WriteCAN(CONTROLWORD, 0x00, 271);  // 0x010F - EPOS4 Application Notes PG 122
+String haltMovement() {
+  String log = WriteCANLogging(CONTROLWORD, 0x00, 271);  // 0x010F - EPOS4 Application Notes PG 122
   delay(CAN_DELAY);                  // Optional delay after setting mode
-  return success;
+  return log;
 }
 
 void QuickStop() {
@@ -118,66 +145,57 @@ void QuickStop() {
   delay(CAN_DELAY);                 // Optional delay after setting mode
 }
 
-bool disable() {
-  bool success = WriteCAN(CONTROLWORD, 0x00, 6);
-  delay(CAN_DELAY);
-  return success;
+void disable() {
+  WriteCAN(CONTROLWORD, 0x00, 6);  // Controlword (Shutdown)
+  delay(CAN_DELAY);                // Optional delay after setting mode
 }
 
-bool enable() {
-  bool success = WriteCAN(CONTROLWORD, 0x00, 15);  // Controlword (Switch on & Enable)
+void enable() {
+  WriteCAN(CONTROLWORD, 0x00, 15);  // Controlword (Switch on & Enable)
   delay(CAN_DELAY);                 // Optional delay after setting mode
-  return success;
 }
 
-bool setOperationMode(int mode) {
-  bool success = WriteCAN(OPERATION_MODE, 0x00, mode);
+void setOperationMode(int mode) {
+  WriteCAN(OPERATION_MODE, 0x00, mode);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setMaxProfileVelocity(int MaxProfileVelocity) {
-  bool success = WriteCAN(MAX_PROFILE_VELOCITY, 0x00, MaxProfileVelocity);
+void setMaxProfileVelocity(int MaxProfileVelocity) {
+  WriteCAN(MAX_PROFILE_VELOCITY, 0x00, MaxProfileVelocity);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setProfileVelocity(int ProfileVelocity) {
-  bool success = WriteCAN(PROFILE_VELOCITY, 0x00, ProfileVelocity);
+void setProfileVelocity(int ProfileVelocity) {
+  WriteCAN(PROFILE_VELOCITY, 0x00, ProfileVelocity);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setProfileAcceleration(int ProfileAcceleration) {
-  bool success = WriteCAN(PROFILE_ACCELERATION, 0x00, ProfileAcceleration);
+void setProfileAcceleration(int ProfileAcceleration) {
+  WriteCAN(PROFILE_ACCELERATION, 0x00, ProfileAcceleration);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setProfileDeceleration(int ProfileDeceleration) {
-  bool success = WriteCAN(PROFILE_DECELERATION, 0x00, ProfileDeceleration);
+void setProfileDeceleration(int ProfileDeceleration) {
+  WriteCAN(PROFILE_DECELERATION, 0x00, ProfileDeceleration);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setQuickStopDeceleration(int QuickStopDeceleration) {
-  bool success = WriteCAN(QUICK_STOP_DECELERATION, 0x00, QuickStopDeceleration);
+void setQuickStopDeceleration(int QuickStopDeceleration) {
+  WriteCAN(QUICK_STOP_DECELERATION, 0x00, QuickStopDeceleration);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setMotionProfileType(int MotionProfileType) {
-  bool success = WriteCAN(MOTION_PROFILE_TYPE, 0x00, MotionProfileType);
+void setMotionProfileType(int MotionProfileType) {
+  WriteCAN(MOTION_PROFILE_TYPE, 0x00, MotionProfileType);
   delay(CAN_DELAY);  // Optional delay after setting mode
-  return success;
 }
 
-bool setTagetVelocity(int TagetVelocity) {
-  if (!WriteCAN(TARGET_VELOCITY, 0x00, TagetVelocity)) return false;
+String setTagetVelocity(int TagetVelocity) {
+  String log1 = WriteCANLogging(TARGET_VELOCITY, 0x00, TagetVelocity);
   delay(CAN_DELAY);
-  if (!WriteCAN(CONTROLWORD, 0x00, 15)) return false;  // 0x000F Refer  EPOS4 Application NOtes PG123.
+  String log2 = WriteCANLogging(CONTROLWORD, 0x00, 15);  // 0x000F Refer  EPOS4 Application NOtes PG123.
   delay(CAN_DELAY);                 // Optional delay after setting mode
-  return true;
+  return log1 + " " + log2;
 }
 
 uint8_t getModeOfOperation() {
@@ -204,27 +222,16 @@ int16_t getCurrentActualValueAveraged() {
   return CurrentActualValueAveraged;
 }
 
-int32_t getVelocityActualValueAveraged() {
+int16_t getVelocityActualValueAveraged() {
   ReadCAN(0x30D3, 0x01);
-  
-  unsigned long startTime = millis();
-  while (millis() - startTime < 50) {
-    CAN_FRAME message;
-    if (CAN0.read(message)) {
-      if (message.id == 0x581) {
-        if (message.data.byte[0] == 0x80) {
-          return INT32_MIN;  // Special error value
-        }
-        if ((message.data.byte[0] == 0x4B || message.data.byte[0] == 0x43) &&
-            message.data.byte[1] == 0xD3 &&
-            message.data.byte[2] == 0x30 &&
-            message.data.byte[3] == 0x01) {
-          return (int16_t)(message.data.byte[4] | (message.data.byte[5] << 8));
-        }
-      }
-    }
+  delay(CAN_DELAY);  //Delay to prevent CAN Rx queue overflow
+  int16_t VelocityActualValueAveraged = 0;
+  CAN_FRAME message;
+  if (CAN0.read(message)) {
+    // Extract mode of operation from the message frame
+    VelocityActualValueAveraged = message.data.byte[4] | (message.data.byte[5] << 8);
   }
-  return INT32_MIN;  // Timeout - return special error value
+  return VelocityActualValueAveraged;
 }
 
 int16_t getCurrentActualValue() {
@@ -345,27 +352,15 @@ int16_t getProfileDeceleration() {
   return profileDeceleration;
 }
 
-int16_t getVelocityDemandValue() {
+int32_t getVelocityDemandValue() {
   ReadCAN(0x606B, 0x00);
-  
-  unsigned long startTime = millis();
-  while (millis() - startTime < 50) {
-    CAN_FRAME message;
-    if (CAN0.read(message)) {
-      if (message.id == 0x581) {
-        if (message.data.byte[0] == 0x80) {
-          return INT16_MIN;  // Special error value
-        }
-        if ((message.data.byte[0] == 0x4B || message.data.byte[0] == 0x43) &&
-            message.data.byte[1] == 0x6B &&
-            message.data.byte[2] == 0x60 &&
-            message.data.byte[3] == 0x00) {
-          return (int16_t)(message.data.byte[4] | (message.data.byte[5] << 8));
-        }
-      }
-    }
+  delay(CAN_DELAY);  //Delay to prevent CAN Rx queue overflow
+  int32_t VelocityDemandValue = 0;
+  CAN_FRAME message;
+  if (CAN0.read(message)) {
+    VelocityDemandValue = message.data.byte[4] | (message.data.byte[5] << 8);
   }
-  return INT16_MIN;  // Timeout - return special error value
+  return VelocityDemandValue;
 }
 
 int32_t getEncoderPulse() {

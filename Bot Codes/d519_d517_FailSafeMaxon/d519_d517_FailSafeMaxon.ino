@@ -74,7 +74,7 @@ using namespace std;
 //--------------------------
 
 // Constant variables
-const String CODE_ID = "d517";
+const String CODE_ID = "d519";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
@@ -1024,7 +1024,7 @@ void loop() {
   }
 
   if (errorMode) {
-    haltMovement();
+    setTagetVelocity(0);  // Stop motor gracefully instead of halt
     ErrorHandling();
   }
 
@@ -1037,36 +1037,52 @@ void loop() {
   }
 
   if (millis() - lastDemandVelocityCheckTime >= 200) {
-    int32_t demandVelocityEPOS = getVelocityDemandValue();
-    if (setSpeed != demandVelocityEPOS) {
-      add_log("UPDATING THE PREV SPEED. USING DEMAND VELOCITY : " + String(previousSetSpeed) + " TO " + String(demandVelocityEPOS));
-      previousSetSpeed = demandVelocityEPOS;
+    int16_t demandVelocityEPOS = getVelocityDemandValue();
+    if (demandVelocityEPOS == INT16_MIN) {
+      add_log("Failed to read demand velocity - communication error");
+    } else {
+      if (setSpeed != demandVelocityEPOS) {
+        add_log("UPDATING THE PREV SPEED. USING DEMAND VELOCITY : " + String(previousSetSpeed) + " TO " + String(demandVelocityEPOS));
+        previousSetSpeed = demandVelocityEPOS;
+      }
     }
     lastDemandVelocityCheckTime = millis();
   }
 
   if (previousSetSpeed != setSpeed && !errorMode) {
     add_log("CHANGING SPEED TO " + String(setSpeed) + " FROM " + String(previousSetSpeed));
-    if (setSpeed != 0) {
-      setTagetVelocity(setSpeed);
-    } else {
-      haltMovement();
+    int retries = 3;
+    bool success = false;
+    while (!success && retries-- > 0) {
+      success = setTagetVelocity(setSpeed);
+      if (!success) delay(10);
     }
-    previousSetSpeed = setSpeed;
+    if (!success) {
+      add_log("Failed to change speed after 3 attempts");
+      errorMode = true;
+      errorCode = 6;  // New error code for motor communication failure
+      firstTimeError = true;
+    } else {
+      previousSetSpeed = setSpeed;
+    }
   }
 
   if (checkForCorrection && !errorMode) {
     if (stopBotFlag) {
-      int speed = getVelocityActualValueAveraged();
-      add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_STOPPED_BETWEEEN_COLUMNS_CORRECTION: " + String(speed));
-      if (speed == 0) {
-        // add_log("CORRECTION TO STOP AT THE NEXT TRAFFIC COLUMN");
-        portENTER_CRITICAL(&setSpeedMux);
-        setSpeed = S0_05;
-        add_log("SET SPEED UPDATE TO: " + String(setSpeed));
-        portEXIT_CRITICAL(&setSpeedMux);
-        add_log("STOP FLAG SET: FALSE");
-        stopBotFlag = false;
+      int32_t speed = getVelocityActualValueAveraged();
+      if (speed == INT32_MIN) {
+        add_log("Failed to read velocity - communication error");
+      } else {
+        add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_STOPPED_BETWEEEN_COLUMNS_CORRECTION: " + String(speed));
+        if (speed == 0) {
+          // add_log("CORRECTION TO STOP AT THE NEXT TRAFFIC COLUMN");
+          portENTER_CRITICAL(&setSpeedMux);
+          setSpeed = S0_05;
+          add_log("SET SPEED UPDATE TO: " + String(setSpeed));
+          portEXIT_CRITICAL(&setSpeedMux);
+          add_log("STOP FLAG SET: FALSE");
+          stopBotFlag = false;
+        }
       }
     }
     portENTER_CRITICAL(&checkForCorrectionMux);
@@ -1078,18 +1094,22 @@ void loop() {
     // Case: If condition true then bot has achieved MINIMAL_SPEED
     if (!stopBotFlag) {
       // Case: If condition true then bot has not already stopped
-      int speed = getVelocityActualValueAveraged();
-      add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_TRAFFIC_ON_LOOP: " + String(speed));
-      if (speed < 30) {
-        // add_log("STOPPING BCZ TRAFFIC ON - HANDLE_TRAFFIC_ON_LOOP");
-        // Stop the bot
-        portENTER_CRITICAL(&setSpeedMux);
-        setSpeed = 0;
-        add_log("SET SPEED UPDATE TO: " + String(setSpeed));
-        portEXIT_CRITICAL(&setSpeedMux);
-        add_log("BOTH STOP AND SLOW-DOWN FLAGS SET: TRUE");
-        stopBotFlag = true;
-        slowDownFlag = true;
+      int32_t speed = getVelocityActualValueAveraged();
+      if (speed == INT32_MIN) {
+        add_log("Failed to read velocity - communication error");
+      } else {
+        add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_TRAFFIC_ON_LOOP: " + String(speed));
+        if (speed < 30) {
+          // add_log("STOPPING BCZ TRAFFIC ON - HANDLE_TRAFFIC_ON_LOOP");
+          // Stop the bot
+          portENTER_CRITICAL(&setSpeedMux);
+          setSpeed = 0;
+          add_log("SET SPEED UPDATE TO: " + String(setSpeed));
+          portEXIT_CRITICAL(&setSpeedMux);
+          add_log("BOTH STOP AND SLOW-DOWN FLAGS SET: TRUE");
+          stopBotFlag = true;
+          slowDownFlag = true;
+        }
       }
     }
     portENTER_CRITICAL(&checkForStopConditionMux);
@@ -1253,20 +1273,60 @@ void CANConfig() {
 }
 
 // Function to define the configuration of driving motor
-void MotorConfig() {
-  disable();
-  enable();
-  setOperationMode(PROFILE_VELOCITY_MODE);
-  WriteCAN(FOLLOWING_ERROR_WINDOW, 0x00, 2000);  // Following error window -   2000inc
+bool MotorConfig() {
+  int retries;
+  
+  retries = 3;
+  while (!disable() && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to disable motor during config"); return false; }
+  
+  retries = 3;
+  while (!enable() && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to enable motor during config"); return false; }
+  
+  retries = 3;
+  while (!setOperationMode(PROFILE_VELOCITY_MODE) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set operation mode"); return false; }
+  
+  retries = 3;
+  while (!WriteCAN(FOLLOWING_ERROR_WINDOW, 0x00, 2000) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set following error window"); return false; }
   delay(CAN_DELAY);
-  setMaxProfileVelocity(2080);
-  setProfileVelocity(800); 
-  setProfileAcceleration(800);
-  setProfileDeceleration(800);
-  setQuickStopDeceleration(800);
-  setMotionProfileType(1);
-  disable();
-  enable();
+  
+  retries = 3;
+  while (!setMaxProfileVelocity(2080) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set max profile velocity"); return false; }
+  
+  retries = 3;
+  while (!setProfileVelocity(800) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set profile velocity"); return false; }
+  
+  retries = 3;
+  while (!setProfileAcceleration(800) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set profile acceleration"); return false; }
+  
+  retries = 3;
+  while (!setProfileDeceleration(800) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set profile deceleration"); return false; }
+  
+  retries = 3;
+  while (!setQuickStopDeceleration(800) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set quick stop deceleration"); return false; }
+  
+  retries = 3;
+  while (!setMotionProfileType(1) && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to set motion profile type"); return false; }
+  
+  retries = 3;
+  while (!disable() && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to disable motor after config"); return false; }
+  
+  retries = 3;
+  while (!enable() && retries-- > 0) delay(10);
+  if (retries < 0) { add_log("Failed to enable motor after config"); return false; }
+  
+  add_log("Motor configuration successful");
+  return true;
 }
 
 void GetDestinationAndJourneyPath() {
