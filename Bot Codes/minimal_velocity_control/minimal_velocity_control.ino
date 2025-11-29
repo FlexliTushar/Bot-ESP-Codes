@@ -1,5 +1,5 @@
 /*
-  Minimal Motor Configuration Test - Low Level CAN Implementation
+  Minimal Velocity Control Test - Low Level CAN Implementation
   REFERENCE - EPOS 4 APPLICATION NOTES SECTION - 7.5 (Profile Velocity Mode)
   
   Hardware:
@@ -9,15 +9,14 @@
   - Maxon EPOS motor controller on CAN bus (Node ID = 1)
   
   What this does:
-  Replicates the MotorConfig() function from d510 using only low-level TWAI calls:
-  1. setOperationMode(PROFILE_VELOCITY_MODE)
-  2. setMaxProfileVelocity(1800)
-  3. setProfileAcceleration(800)
-  4. setProfileDeceleration(800)
-  5. setQuickStopDeceleration(800)
-  6. setMotionProfileType(0)
-  7. shutdown()
-  8. enable()
+  Implements setTargetVelocity and haltMovement at low level, then:
+  1. Configures motor in Profile Velocity Mode
+  2. Cycles through different speed levels every 5 seconds:
+     - 267 rpm (0.5 m/s)
+     - 535 rpm (1.0 m/s)
+     - 802 rpm (1.5 m/s)
+     - Halt (stop)
+     - Repeat
   
   No external libraries except esp-idf TWAI driver.
 */
@@ -36,23 +35,27 @@
 #define SDO_TX  (0x600 + NODE_ID)  // Client->Server (our requests)
 #define SDO_RX  (0x580 + NODE_ID)  // Server->Client (EPOS responses)
 
-// EPOS Object Dictionary indices (from object_dictionary.h)
+// EPOS Object Dictionary indices
 #define CONTROLWORD                 0x6040
 #define OPERATION_MODE              0x6060
-#define FOLLOWING_ERROR_WINDOW      0x6065
+#define TARGET_VELOCITY             0x60FF
+#define VELOCITY_ACTUAL_VALUE_AVG   0x30D3
 #define MAX_PROFILE_VELOCITY        0x607F
-#define PROFILE_VELOCITY            0x6081
 #define PROFILE_ACCELERATION        0x6083
 #define PROFILE_DECELERATION        0x6084
-#define QUICK_STOP_DECELERATION     0x6085
-#define MOTION_PROFILE_TYPE         0x6086
 
 // Operation modes
 #define PROFILE_VELOCITY_MODE       3
 
 // Controlword values
-#define CONTROLWORD_SHUTDOWN        6    // 0x0006 - shutdown power
-#define CONTROLWORD_ENABLE          15   // 0x000F - enable and start
+#define CONTROLWORD_SHUTDOWN        6     // 0x0006 - disable motor
+#define CONTROLWORD_ENABLE          15    // 0x000F - enable and start
+#define CONTROLWORD_HALT            271   // 0x010F - halt movement (bit 8 set)
+
+// Motor speed levels (from your object_dictionary.h)
+#define S0_5          267   // 0.5 m/s
+#define S1            535   // 1.0 m/s
+#define S1_5          802   // 1.5 m/s
 
 // SDO response timeout (ms)
 #define SDO_RESPONSE_TIMEOUT        10
@@ -81,25 +84,19 @@ enum CANStatus {
 
 // Initialize CAN hardware
 bool CAN_Init() {
-  // TWAI general config
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
     CAN_TX_PIN, 
     CAN_RX_PIN, 
     TWAI_MODE_NORMAL
   );
   
-  // 500 kbit/s timing
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
-  
-  // Accept all frames (no filtering)
   twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   
-  // Install driver
   if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) {
     return false;
   }
   
-  // Start driver
   if (twai_start() != ESP_OK) {
     return false;
   }
@@ -163,14 +160,12 @@ CANStatus CAN_Receive(SimpleCANFrame* frame, uint32_t timeout_ms) {
 CANStatus SDO_Write(uint16_t index, uint8_t subindex, uint32_t value) {
   SimpleCANFrame tx_frame;
   
-  // Build SDO download request
   tx_frame.id       = SDO_TX;
   tx_frame.dlc      = 8;
   tx_frame.extended = false;
   tx_frame.rtr      = false;
   
-  // Command byte: 0x22 for 2-byte expedited write (matching your maxon.h)
-  tx_frame.data[0] = 0x22;
+  tx_frame.data[0] = 0x22;  // Expedited write
   tx_frame.data[1] = index & 0xFF;
   tx_frame.data[2] = (index >> 8) & 0xFF;
   tx_frame.data[3] = subindex;
@@ -182,17 +177,8 @@ CANStatus SDO_Write(uint16_t index, uint8_t subindex, uint32_t value) {
   // Send request
   CANStatus status = CAN_Send(&tx_frame, 4);
   if (status != CAN_OK) {
-    Serial.print("TX failed: ");
-    Serial.println(status);
     return status;
   }
-  
-  Serial.print("SDO Write 0x");
-  Serial.print(index, HEX);
-  Serial.print("[");
-  Serial.print(subindex);
-  Serial.print("] = ");
-  Serial.println(value);
   
   // Wait for SDO response (ACK frame)
   SimpleCANFrame rx_frame;
@@ -202,7 +188,6 @@ CANStatus SDO_Write(uint16_t index, uint8_t subindex, uint32_t value) {
     status = CAN_Receive(&rx_frame, 1);
     
     if (status == CAN_OK) {
-      // Check if it's our SDO response
       if (rx_frame.id == SDO_RX) {
         uint8_t cmd = rx_frame.data[0];
         
@@ -212,22 +197,146 @@ CANStatus SDO_Write(uint16_t index, uint8_t subindex, uint32_t value) {
                               | (rx_frame.data[5] << 8)
                               | (rx_frame.data[6] << 16)
                               | (rx_frame.data[7] << 24);
-          Serial.print("  -> SDO ABORT: 0x");
+          Serial.print("SDO ABORT: 0x");
           Serial.println(abort_code, HEX);
           return CAN_SDO_ABORT;
         }
         
         // Download response (0x60)
         if (cmd == 0x60) {
-          Serial.println("  -> OK");
           return CAN_OK;
         }
       }
     }
   }
   
-  Serial.println("  -> TIMEOUT");
   return CAN_RX_TIMEOUT;
+}
+
+// Send SDO Upload (read) and wait for response
+CANStatus SDO_Read(uint16_t index, uint8_t subindex, uint32_t* value) {
+  SimpleCANFrame tx_frame;
+  
+  tx_frame.id       = SDO_TX;
+  tx_frame.dlc      = 8;
+  tx_frame.extended = false;
+  tx_frame.rtr      = false;
+  
+  tx_frame.data[0] = 0x40;  // Upload request
+  tx_frame.data[1] = index & 0xFF;
+  tx_frame.data[2] = (index >> 8) & 0xFF;
+  tx_frame.data[3] = subindex;
+  tx_frame.data[4] = 0x00;
+  tx_frame.data[5] = 0x00;
+  tx_frame.data[6] = 0x00;
+  tx_frame.data[7] = 0x00;
+  
+  // Send request
+  CANStatus status = CAN_Send(&tx_frame, 4);
+  if (status != CAN_OK) {
+    return status;
+  }
+  
+  // Wait for response
+  SimpleCANFrame rx_frame;
+  uint32_t start = millis();
+  
+  while ((millis() - start) < SDO_RESPONSE_TIMEOUT) {
+    status = CAN_Receive(&rx_frame, 1);
+    
+    if (status == CAN_OK) {
+      if (rx_frame.id == SDO_RX) {
+        uint8_t cmd = rx_frame.data[0];
+        
+        // SDO abort (0x80)
+        if (cmd == 0x80) {
+          return CAN_SDO_ABORT;
+        }
+        
+        // Upload response (0x43 or 0x4B typically)
+        if ((cmd & 0xE0) == 0x40) {
+          *value = rx_frame.data[4] 
+                 | (rx_frame.data[5] << 8)
+                 | (rx_frame.data[6] << 16)
+                 | (rx_frame.data[7] << 24);
+          return CAN_OK;
+        }
+      }
+    }
+  }
+  
+  return CAN_RX_TIMEOUT;
+}
+
+//=============================================================================
+// BASIC MOTOR CONTROL FUNCTIONS
+//=============================================================================
+
+CANStatus shutdown() {
+  return SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_SHUTDOWN);
+}
+
+CANStatus enable() {
+  return SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_ENABLE);
+}
+
+CANStatus setOperationMode(int mode) {
+  return SDO_Write(OPERATION_MODE, 0x00, mode);
+}
+
+//=============================================================================
+// VELOCITY CONTROL FUNCTIONS (matching your maxon.h)
+//=============================================================================
+
+// setTargetVelocity - Write target velocity and start motion
+CANStatus setTargetVelocity(int velocity) {
+  CANStatus status;
+  
+  // 1) Write Target Velocity (0x60FF)
+  status = SDO_Write(TARGET_VELOCITY, 0x00, (uint32_t)velocity);
+  if (status != CAN_OK) {
+    Serial.print("Failed to set velocity: ");
+    Serial.println(status);
+    return status;
+  }
+  
+  // 2) Write Controlword = 15 (enable & start)
+  status = SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_ENABLE);
+  if (status != CAN_OK) {
+    Serial.print("Failed to enable: ");
+    Serial.println(status);
+    return status;
+  }
+  
+  Serial.print("✓ Set velocity to ");
+  Serial.print(velocity);
+  Serial.println(" rpm");
+  
+  return CAN_OK;
+}
+
+// haltMovement - Stop motor using halt controlword
+CANStatus haltMovement() {
+  CANStatus status = SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_HALT);
+  
+  if (status == CAN_OK) {
+    Serial.println("✓ Motor halted");
+  } else {
+    Serial.print("Failed to halt: ");
+    Serial.println(status);
+  }
+  
+  return status;
+}
+
+// Read actual velocity
+CANStatus getVelocityActualValueAveraged(int32_t* velocity) {
+  uint32_t raw;
+  CANStatus status = SDO_Read(VELOCITY_ACTUAL_VALUE_AVG, 0x01, &raw);
+  if (status == CAN_OK) {
+    *velocity = (int32_t)raw;  // Treat as signed
+  }
+  return status;
 }
 
 //=============================================================================
@@ -291,7 +400,7 @@ CANStatus setMotionProfileType(int value) {
 }
 
 //=============================================================================
-// MOTOR CONFIG - Complete function from d510
+// MOTOR CONFIGURATION
 //=============================================================================
 
 void MotorConfig() {
@@ -359,9 +468,8 @@ void setup() {
   delay(2000);
   
   Serial.println("\n========================================");
-  Serial.println("  Minimal Motor Config Test - Low Level");
+  Serial.println("  Minimal Velocity Control Test");
   Serial.println("========================================");
-  Serial.println("Initializing TWAI (CAN)...");
   
   if (!CAN_Init()) {
     Serial.println("✗ FAILED to initialize CAN!");
@@ -371,21 +479,55 @@ void setup() {
   }
   
   Serial.println("✓ CAN initialized at 500 kbit/s");
-  Serial.println("  TX: GPIO 14, RX: GPIO 15");
-  Serial.println();
+  Serial.println("  TX: GPIO 14, RX: GPIO 15\n");
   
   delay(1000);
   
-  // Run motor configuration sequence
+  // Configure motor
   MotorConfig();
   
-  Serial.println("\n========================================");
-  Serial.println("Setup complete. Entering idle loop.");
-  Serial.println("========================================\n");
+  Serial.println("Starting velocity cycling...\n");
 }
 
 void loop() {
-  // Nothing to do - configuration is one-time in setup
-  delay(5000);
-  Serial.println("Idle...");
+  static int state = 0;
+  int32_t actual_velocity;
+  
+  switch (state) {
+    case 0:
+      Serial.println("\n========== Speed: 0.5 m/s (267 rpm) ==========");
+      setTargetVelocity(S0_5);
+      break;
+      
+    case 1:
+      Serial.println("\n========== Speed: 1.0 m/s (535 rpm) ==========");
+      setTargetVelocity(S1);
+      break;
+      
+    case 2:
+      Serial.println("\n========== Speed: 1.5 m/s (802 rpm) ==========");
+      setTargetVelocity(S1_5);
+      break;
+      
+    case 3:
+      Serial.println("\n========== HALT ==========");
+      haltMovement();
+      break;
+  }
+  
+  // Wait and monitor actual velocity
+  for (int i = 0; i < 5; i++) {
+    delay(4000);
+    
+    if (getVelocityActualValueAveraged(&actual_velocity) == CAN_OK) {
+      Serial.print("  Actual velocity: ");
+      Serial.print(actual_velocity);
+      Serial.println(" rpm");
+    } else {
+      Serial.println("  Failed to read velocity");
+    }
+  }
+  
+  // Move to next state
+  state = (state + 1) % 4;
 }
