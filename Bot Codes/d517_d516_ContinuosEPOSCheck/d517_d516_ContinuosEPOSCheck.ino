@@ -1039,7 +1039,7 @@ void loop() {
   if (millis() - lastDemandVelocityCheckTime >= 200) {
     int32_t demandVelocityEPOS = getVelocityDemandValue();
     if (setSpeed != demandVelocityEPOS) {
-      add_log("UPDATING THE PREV SPEED. USING DEMAND VELOCITY : " + String(previousSetSpeed) + " TO " + String(demandVelocityEPOS));
+      // add_log("UPDATING THE PREV SPEED. USING DEMAND VELOCITY : " + String(previousSetSpeed) + " TO " + String(demandVelocityEPOS));
       previousSetSpeed = demandVelocityEPOS;
     }
     lastDemandVelocityCheckTime = millis();
@@ -1058,7 +1058,7 @@ void loop() {
   if (checkForCorrection && !errorMode) {
     if (stopBotFlag) {
       int speed = getVelocityActualValueAveraged();
-      add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_STOPPED_BETWEEEN_COLUMNS_CORRECTION: " + String(speed));
+      // add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_STOPPED_BETWEEEN_COLUMNS_CORRECTION: " + String(speed));
       if (speed == 0) {
         // add_log("CORRECTION TO STOP AT THE NEXT TRAFFIC COLUMN");
         portENTER_CRITICAL(&setSpeedMux);
@@ -1079,7 +1079,7 @@ void loop() {
     if (!stopBotFlag) {
       // Case: If condition true then bot has not already stopped
       int speed = getVelocityActualValueAveraged();
-      add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_TRAFFIC_ON_LOOP: " + String(speed));
+      // add_log("ASKING SPEED FEEDBACK FROM MAXON - HANDLE_TRAFFIC_ON_LOOP: " + String(speed));
       if (speed < 30) {
         // add_log("STOPPING BCZ TRAFFIC ON - HANDLE_TRAFFIC_ON_LOOP");
         // Stop the bot
