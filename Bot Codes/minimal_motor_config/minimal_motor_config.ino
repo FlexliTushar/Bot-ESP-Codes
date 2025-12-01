@@ -46,6 +46,7 @@
 #define PROFILE_DECELERATION        0x6084
 #define QUICK_STOP_DECELERATION     0x6085
 #define MOTION_PROFILE_TYPE         0x6086
+#define TARGET_VELOCITY             0x60FF
 
 // Operation modes
 #define PROFILE_VELOCITY_MODE       3
@@ -295,6 +296,7 @@ CANStatus setMotionProfileType(int value) {
 //=============================================================================
 
 void MotorConfig() {
+  delay(5000);
   Serial.println("\n========================================");
   Serial.println("    MOTOR CONFIGURATION SEQUENCE");
   Serial.println("========================================");

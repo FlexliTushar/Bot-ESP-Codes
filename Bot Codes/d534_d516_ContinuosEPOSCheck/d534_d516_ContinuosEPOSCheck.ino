@@ -1046,10 +1046,10 @@ void loop() {
   //   loopLogTime = millis();
   // }
 
-  if (errorMode) {
-    haltMovement();
-    ErrorHandling();
-  }
+  // if (errorMode) {
+  //   haltMovement();
+  //   ErrorHandling();
+  // }
 
   if (changeDirection) {
     // add_log("Changing diverter to " + String(diverterDirection));
