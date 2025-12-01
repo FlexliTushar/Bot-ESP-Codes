@@ -67,7 +67,6 @@ const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
 
-
 Adafruit_MCP23X17 mcp;
 // Logger variables
 String BOT_ID = "B";

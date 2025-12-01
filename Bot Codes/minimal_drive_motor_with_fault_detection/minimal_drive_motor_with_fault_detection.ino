@@ -53,9 +53,23 @@
 #define CONTROLWORD_HALT            271   // 0x010F - halt movement (bit 8 set)
 
 // Motor speed levels
-#define S0_5          267   // 0.5 m/s
-#define S1            535   // 1.0 m/s
-#define S1_5          802   // 1.5 m/s
+// Motor Speed Levels
+#define S0_03 15   // 0.03 m/s
+#define S0_05 26   // 0.05 m/s
+#define S0_1 53    // 0.1 m/s
+#define S0_2 106   // 0.2 m/s
+#define S0_3 160   // 0.3 m/s
+#define S0_5 267   // 0.5 m/s
+#define S1 535     // 1 m/s
+#define S1_5 802   // 1.5 m/s
+#define S2 1070    // 2 m/s
+#define S2_5 1337  // 2.5 m/s
+#define S3 1604    // 3 m/s
+
+// GPIO Pin Assignments
+#define BUZZER 13
+#define COLUMN_INDICATOR_SENSOR 33
+#define TRAFFIC_INDICATOR_SENSOR 35
 
 // SDO response timeout (ms)
 #define SDO_RESPONSE_TIMEOUT        10
