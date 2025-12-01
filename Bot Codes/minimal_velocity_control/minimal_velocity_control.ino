@@ -43,6 +43,8 @@
 #define MAX_PROFILE_VELOCITY        0x607F
 #define PROFILE_ACCELERATION        0x6083
 #define PROFILE_DECELERATION        0x6084
+#define QUICK_STOP_DECELERATION     0x6085
+#define MOTION_PROFILE_TYPE         0x6086
 
 // Operation modes
 #define PROFILE_VELOCITY_MODE       3
@@ -268,21 +270,6 @@ CANStatus SDO_Read(uint16_t index, uint8_t subindex, uint32_t* value) {
   return CAN_RX_TIMEOUT;
 }
 
-//=============================================================================
-// BASIC MOTOR CONTROL FUNCTIONS
-//=============================================================================
-
-CANStatus shutdown() {
-  return SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_SHUTDOWN);
-}
-
-CANStatus enable() {
-  return SDO_Write(CONTROLWORD, 0x00, CONTROLWORD_ENABLE);
-}
-
-CANStatus setOperationMode(int mode) {
-  return SDO_Write(OPERATION_MODE, 0x00, mode);
-}
 
 //=============================================================================
 // VELOCITY CONTROL FUNCTIONS (matching your maxon.h)
