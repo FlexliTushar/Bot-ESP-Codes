@@ -391,6 +391,7 @@ CANStatus setMotionProfileType(int value) {
 //=============================================================================
 
 void MotorConfig() {
+  delay(5000);
   Serial.println("\n========================================");
   Serial.println("    MOTOR CONFIGURATION SEQUENCE");
   Serial.println("========================================");
@@ -472,6 +473,8 @@ void setup() {
   
   // Configure motor
   MotorConfig();
+
+  delay(1000);
   
   Serial.println("Starting velocity cycling...\n");
 }
