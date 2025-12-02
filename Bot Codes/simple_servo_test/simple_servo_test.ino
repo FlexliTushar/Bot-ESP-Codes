@@ -27,15 +27,15 @@
 #define MOVE_SPEED          1000    // Speed
 #define MOVE_ACC            50      // Acceleration
 
-// Register Addresses (Based on SMS/Feetech standard)
-#define REG_TORQUE_ENABLE   40
-#define REG_GOAL_POSITION   42
-#define REG_PRESENT_POS     56
+// Register Addresses (From SMS.h - exact library values)
+#define REG_TORQUE_ENABLE   129  // SMS_TORQUE_ENABLE (SRAM)
+#define REG_GOAL_POSITION   128  // SMS_GOAL_POSITION (SRAM)
+#define REG_PRESENT_POS     257  // SMS_PRESENT_POSITION (SRAM read-only)
 
-// Modbus Function Codes
-#define FC_READ_REGISTERS   0x03
-#define FC_WRITE_SINGLE     0x06
-#define FC_WRITE_MULTIPLE   0x10
+// Modbus Function Codes (decimal to match library)
+#define FC_READ_REGISTERS   3
+#define FC_WRITE_SINGLE     6
+#define FC_WRITE_MULTIPLE   16
 
 // Global State
 bool torqueDisabled = false;
@@ -168,22 +168,30 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 50) {
 // ============================================================================
 
 // Enable or Disable Torque
+// Modbus FC 06: Write Single Register (Big-Endian format)
 bool enableTorque(uint8_t id, bool enable) {
   uint8_t txBuf[8];
   uint8_t rxBuf[8];
   
-  // Frame: ID, FC, AddrHi, AddrLo, ValHi, ValLo, CRC_L, CRC_H
+  // Modbus Frame: ID, FC, AddrHi, AddrLo, DataHi, DataLo, CRC_L, CRC_H
   txBuf[0] = id;
-  txBuf[1] = FC_WRITE_SINGLE;
-  txBuf[2] = 0x00;
-  txBuf[3] = REG_TORQUE_ENABLE;
-  txBuf[4] = 0x00;
-  txBuf[5] = enable ? 1 : 0;
+  txBuf[1] = FC_WRITE_SINGLE;            // 6
+  txBuf[2] = (REG_TORQUE_ENABLE >> 8) & 0xFF;  // Address high byte
+  txBuf[3] = REG_TORQUE_ENABLE & 0xFF;         // Address low byte (129 = 0x81)
+  txBuf[4] = 0x00;                       // Data high byte (always 0 for enable/disable)
+  txBuf[5] = enable ? 0x01 : 0x00;      // Data low byte (1=enable, 0=disable)
+  
+  Serial.print("EnableTorque: ID=");
+  Serial.print(id);
+  Serial.print(" Reg=");
+  Serial.print(REG_TORQUE_ENABLE);
+  Serial.print(" Val=");
+  Serial.println(enable ? 1 : 0);
   
   sendPacket(txBuf, 6);
   
-  // Expect echo response (same length)
-  int result = readResponse(rxBuf, 8);
+  // Expect echo response (same 8 bytes: 6 data + 2 CRC)
+  int result = readResponse(rxBuf, 8, 100);
   return (result == 8);
 }
 
