@@ -123,19 +123,29 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 50) {
   }
   
   if (bytesRead < expectedLen) {
-    Serial.print("Error: Timeout/Incomplete. Read ");
+    Serial.print("\n✗ TIMEOUT/INCOMPLETE READ: ");
     Serial.print(bytesRead);
     Serial.print("/");
     Serial.print(expectedLen);
+    Serial.println(" bytes");
+    
     if (bytesRead > 0) {
-      Serial.print(" RX: ");
+      Serial.print("   Partial RX: ");
       for (int i = 0; i < bytesRead; i++) {
         if (buffer[i] < 0x10) Serial.print("0");
         Serial.print(buffer[i], HEX);
         Serial.print(" ");
       }
+      Serial.println();
+      Serial.println("   → Likely: Baud rate mismatch or servo processing delay");
+      Serial.println("   → Check: Servo baud = 115200, timeout sufficient");
+    } else {
+      Serial.println("   → NO RESPONSE from servo");
+      Serial.println("   → Check: 1) TX/RX wiring (crossed or disconnected)");
+      Serial.println("            2) Common GND between ESP32 and servo");
+      Serial.println("            3) Servo powered on and ID correct");
+      Serial.println("            4) Servo in Modbus mode (not TTL half-duplex)");
     }
-    Serial.println();
     return -1;
   }
   
@@ -153,10 +163,16 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 50) {
   uint16_t calculatedCRC = calcCRC(buffer, bytesRead - 2);
   
   if (receivedCRC != calculatedCRC) {
-    Serial.print("Error: CRC Mismatch. Recv: 0x");
+    Serial.print("\n✗ CRC MISMATCH: Recv=0x");
     Serial.print(receivedCRC, HEX);
-    Serial.print(" Calc: 0x");
+    Serial.print(" Expected=0x");
     Serial.println(calculatedCRC, HEX);
+    Serial.println("   → Data corrupted in transmission");
+    Serial.println("   → Check: 1) Cable length (<3m recommended)");
+    Serial.println("            2) EMI/noise from motor cables");
+    Serial.println("            3) Loose connections");
+    Serial.println("            4) Power supply noise/ripple");
+    Serial.println("            5) Baud rate too high for cable quality");
     return -2;
   }
   
@@ -192,6 +208,15 @@ bool enableTorque(uint8_t id, bool enable) {
   
   // Expect echo response (same 8 bytes: 6 data + 2 CRC)
   int result = readResponse(rxBuf, 8, 100);
+  
+  if (result != 8) {
+    Serial.println("   ✗ EnableTorque failed - see error above");
+    if (result == -1) {
+      Serial.println("   → Servo may not support torque enable at reg 129");
+      Serial.println("   → Or servo in fault/alarm state");
+    }
+  }
+  
   return (result == 8);
 }
 
@@ -246,6 +271,15 @@ bool setPosition(uint8_t id, int16_t position, uint16_t speed, uint8_t acc) {
   
   // Expect response: ID, FC, AddrHi, AddrLo, QtyHi, QtyLo, CRC_L, CRC_H
   int result = readResponse(rxBuf, 8, 100);
+  
+  if (result != 8) {
+    Serial.println("   ✗ SetPosition failed - see error above");
+    if (result == -1) {
+      Serial.println("   → Servo may reject: position out of limits");
+      Serial.println("   → Or torque not enabled first");
+    }
+  }
+  
   return (result == 8);
 }
 
@@ -274,6 +308,10 @@ int16_t readPosition(uint8_t id) {
     return pos;
   }
   
+  Serial.println("   ✗ ReadPosition failed - see error above");
+  if (result == -1) {
+    Serial.println("   → Servo may not support reading position at reg 257");
+  }
   return -1; // Error
 }
 
@@ -291,10 +329,14 @@ void setup() {
   // Load Config
   LoadDiverterConfig();
   if (front_diverter_right_limit == 0) {
-    Serial.println("Warning: Config loaded 0 for right limit. Check NVM.");
+    Serial.println("\n⚠ WARNING: Target position = 0");
+    Serial.println("   → This may be valid or indicate NVM not programmed");
+    Serial.println("   → Servo will attempt to move to position 0");
   } else {
-    Serial.print("Config Loaded. Target: ");
-    Serial.println(front_diverter_right_limit);
+    Serial.print("✓ Config Loaded. Target: ");
+    Serial.print(front_diverter_right_limit);
+    Serial.print(" Tolerance: ");
+    Serial.println(front_diverter_tolerance);
   }
   
   // 1. Enable Torque
@@ -353,7 +395,10 @@ void loop() {
 // Function to load values from NVM
 void LoadDiverterConfig() {
   if (!prefs.begin("diverter", true)) {
-    Serial.println("Error: Failed to open NVM namespace 'diverter'");
+    Serial.println("\n✗ NVM ACCESS FAILED");
+    Serial.println("   → NVS partition may be corrupted or full");
+    Serial.println("   → Check: Flash erase/reflash may be needed");
+    Serial.println("   → Using default values (may be invalid)");
     return;
   }
   
