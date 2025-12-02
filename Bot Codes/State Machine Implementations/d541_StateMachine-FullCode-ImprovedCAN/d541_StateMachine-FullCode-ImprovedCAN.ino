@@ -1,45 +1,21 @@
+#define FIRMWARE_VERSION "d531"
 /*
-  Library-less Drive Motor State Machine - Libraryless CAN Implementation
-  REFERENCE - EPOS 4 APPLICATION NOTES SECTION - 7.5 (Profile Velocity Mode)
-  CODE ID: d539
+  Diverter State Machine Test Sketch
+  ====================================
+  Standalone test for diverter state machine control
   
-  Hardware Configuration:
-  - ESP32 CAN TX: GPIO 14
-  - ESP32 CAN RX: GPIO 15
-  - CAN transceiver connected to these pins
-  - Maxon EPOS motor controller on CAN bus (Node ID = 1)
-  - Traffic Indicator Sensor: GPIO 35
-  - Column Indicator Sensor: GPIO 33
-  - Buzzer: GPIO 13
-  
-  Features:
-  1. 5-state drive motor state machine (STOP, STOPPING, RUNNING, SWEEPING_COLUMN, ERROR)
-  2. Column detection with health monitoring (WTM - Width Tracking Module)
-  3. Full CAN fault detection (SDO aborts, TWAI alerts, ESP errors)
-  4. HTTP debug logging over WiFi
-  5. Profile Velocity Mode motor control
-  
-  No external CAN libraries - uses esp-idf TWAI driver directly.
+  This sketch tests the diverter state machine by automatically toggling
+  the demand direction between LEFT and RIGHT every 5 seconds.
 */
 
+#include <SMS.h>
+#include <Adafruit_MCP23X17.h>
 #include "driver/twai.h"
 #include "driver/gpio.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
-#include <SMS.h>
-
-//=============================================================================
-// GPIO PIN DEFINITIONS
-//=============================================================================
-#define BUZZER                      13
-#define COLUMN_INDICATOR_SENSOR     33
-#define TRAFFIC_INDICATOR_SENSOR    35
-#define FRONT_SERVO 2
-#define REAR_SERVO 3
-
-#define ENABLE 1
-#define DISABLE 0
+using namespace std;
 
 //=============================================================================
 // CAN HARDWARE CONFIGURATION
@@ -94,34 +70,19 @@
 #define SDO_RESPONSE_TIMEOUT        10    // SDO response timeout (ms)
 #define MOTOR_POWERUP_DELAY         5000  // Motor power-up delay (ms)
 
-//=============================================================================
-// WIFI AND HTTP CONFIGURATION
-//=============================================================================
-const String CODE_ID = "d540";
-const char* SSID = "Server_PC";
-const char* PASSWORD = "msort@flexli";
-const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
-const String ENTITY_TYPE = "bot";
-bool global_error_status = false;
+// GPIO Pin Assignments
+#define BUZZER 13
+#define COLUMN_INDICATOR_SENSOR 33
+#define TRAFFIC_INDICATOR_SENSOR 35
+#define FRONT_SERVO 2
+#define REAR_SERVO 3
+#define PANEL_LED_BUTTON 7
+#define EMG_PIN 12
+#define AFC_PIN_1 19
+#define AFC_PIN_2 18
 
-//=============================================================================
-// COLUMN DETECTION THRESHOLDS
-//=============================================================================
-const int EXIT_CONFIRMATION_THRESHOLD = 5;      // Consecutive 00s to confirm column exit
-const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames for valid column
-const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Expected column width in frames
-const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected empty space frames
-
-// Health monitoring thresholds (percentages)
-const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
-const float MAJORITY_WARNING_THRESHOLD = 60.0;   // 60-80% is warning
-const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
-const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning
-const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 is safe
-
-//=============================================================================
-// ENUMERATIONS
-//=============================================================================
+#define ENABLE 1
+#define DISABLE 0
 
 // CAN operation status codes
 enum CANStatus {
@@ -132,39 +93,36 @@ enum CANStatus {
   CAN_ERROR
 };
 
-// Health monitoring status
+// Health monitoring
 enum HealthStatus {
   SAFE,
   WARNING,
   CRITICAL
 };
 
-// Column detection state machine states
+// Column detection state machine variables
 enum WTMColumnState {
   WTM_BETWEEN_COLUMNS,  // In 00 zone between columns
   WTM_IN_COLUMN         // On a column (01, 10, or 11)
 };
 
-// Drive motor state machine states
 enum DriveMotorState {
-  DRIVE_MOTOR_STOP = 1,
-  DRIVE_MOTOR_STOPPING = 2,
-  DRIVE_MOTOR_RUNNING = 3,
-  DRIVE_MOTOR_SWEEPING_COLUMN = 4,
-  DRIVE_MOTOR_ERROR = 5
+    DRIVE_MOTOR_STOP = 1,
+    DRIVE_MOTOR_STOPPING = 2,
+    DRIVE_MOTOR_RUNNING = 3,
+    DRIVE_MOTOR_SWEEPING_COLUMN = 4,
+    DRIVE_MOTOR_ERROR = 5
 };
 
-// Drive motor direction
 enum DriveMotorDirection {
-  DRIVE_MOTOR_FORWARD = 1,
-  DRIVE_MOTOR_REVERSE = -1
+    DRIVE_MOTOR_FORWARD = 1,
+    DRIVE_MOTOR_REVERSE = -1
 };
 
-// State update return codes
 enum DriveMotorStateOutput {
-  DRIVE_MOTOR_STATE_NO_CHANGE = 0,
-  DRIVE_MOTOR_STATE_CHANGED = 1,
-  DRIVE_MOTOR_UNKNOWN_STATE = 2
+    DRIVE_MOTOR_STATE_NO_CHANGE = 0,
+    DRIVE_MOTOR_STATE_CHANGED = 1,
+    DRIVE_MOTOR_UNKNOWN_STATE = 2
 };
 
 enum DiverterState : uint8_t {
@@ -206,6 +164,8 @@ struct SimpleCANFrame {
   bool     extended;
   bool     rtr;
 };
+
+SemaphoreHandle_t xDebugLogMutex;
 
 //=============================================================================
 // DIAGNOSTIC FUNCTIONS
@@ -978,75 +938,84 @@ bool MotorConfig() {
   return true;
 }
 
-//=============================================================================
-// GLOBAL VARIABLES - HTTP LOGGING
-//=============================================================================
+// Constant variables
+const String CODE_ID = "d541";
+const char* SSID = "Server_PC";
+const char* PASSWORD = "msort@flexli";
+const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
+const String ENTITY_TYPE = "bot";
 
+Adafruit_MCP23X17 mcp;
+SMS sm;
+Preferences prefs;
+
+// Logger variables
 String BOT_ID = "B";
 String debugLoggingString = "";
 HTTPClient httpDebugger;
 TaskHandle_t httpDebugLog;
 bool loggerFlag = true;
 
-//=============================================================================
-// GLOBAL VARIABLES - COLUMN DETECTION (WTM)
-//=============================================================================
-
-// State machine state
 WTMColumnState wtm_column_state = WTM_BETWEEN_COLUMNS;
 
-// Frame counters for each sensor combination
-int frameCount00 = 0;  // Neither sensor active
-int frameCount01 = 0;  // Column indicator only
-int frameCount10 = 0;  // Traffic indicator only (malfunction)
-int frameCount11 = 0;  // Both sensors active
+// Frame counts for each possible column state
+int frameCount00 = 0;
+int frameCount01 = 0;
+int frameCount10 = 0;
+int frameCount11 = 0;
 
-// Exit confirmation
+// Confirmation variables
 int exitConfirmationCount = 0;  // Count of consecutive 00 samples
+const int EXIT_CONFIRMATION_THRESHOLD = 5;  // Need 5 consecutive 00s to confirm exit (relaxed from 10)
 
 // Column tracking
-String detectedColumnCode = "";   // The actual column code (01, 10, or 11)
+String detectedColumnCode = "";  // The actual column code (01, 10, or 11)
 String currentColumnCode = "";    // Current column code being read
 String previousColumnCode = "";   // Previous column code that was detected
 
-// Health status variables
+// Health monitoring thresholds
+const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
+const float MAJORITY_WARNING_THRESHOLD = 60.0;   // 60-80% is warning, < 60% is critical
+const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
+const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning, > 40% is critical
+const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Conservative threshold for column width
+const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames to consider valid column (filter noise)
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected minimum frames for empty space (relaxed from 30)
+const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 readings is safe for empty space
+
 HealthStatus majorityHealthWTM = SAFE;
 HealthStatus minorityHealthWTM = SAFE;
 HealthStatus overallHealthWTM = SAFE;
 
-// Empty space tracking
+// Empty space tracking for health monitoring
 int emptySpaceFrameCount = 0;        // Frame count for current empty space (pure 00s)
-int emptySpaceNoiseFrameCount = 0;   // Count of non-00 frames during empty space
+int emptySpaceNoiseFrameCount = 0;   // Count of non-00 frames detected during empty space (for health)
 int emptySpaceTotalFrameCount = 0;   // Total frames in empty space including noise
-HealthStatus emptySpaceHealth = SAFE;
-HealthStatus emptySpaceMajorityHealth = SAFE;
-HealthStatus emptySpaceMinorityHealth = SAFE;
-int totalEmptySpacesDetected = 0;
+HealthStatus emptySpaceHealth = SAFE; // Health of empty space (should have minimal non-00 readings)
+HealthStatus emptySpaceMajorityHealth = SAFE;  // Majority health (00 frames)
+HealthStatus emptySpaceMinorityHealth = SAFE;  // Minority health (noise frames)
+int totalEmptySpacesDetected = 0;    // Total empty spaces detected
 int totalFramesBetweenSpaces = 0;
 
-// Column completion tracking
-bool columnJustCompleted = false;           // Flag: true when column just finished
-String lastCompletedColumnCode = "";        // The column code just read (01, 10, 11)
-HealthStatus lastCompletedColumnHealth = SAFE;
+// Column completion flag and data - set when column successfully read
+bool columnJustCompleted = false;      // Flag: true when column just finished reading
+String lastCompletedColumnCode = "";   // The column code that was just read (01, 10, 11)
+HealthStatus lastCompletedColumnHealth = SAFE;  // Health of the column that was just read
 
-// Station-to-station segment tracking
+// Tracking variables for station-to-station segment
 String previousStation = "X";
-int uniqueColumnsDetectedInSegment = 0;  // Count of unique columns between stations
+int uniqueColumnsDetectedInSegment = 0;  // Count of unique columns (01, 10, 11) between stations
 int emptySpacesDetectedInSegment = 0;    // Count of 00 zones between stations
-int totalColumnsDetected = 0;
 
-//=============================================================================
-// GLOBAL VARIABLES - DRIVE MOTOR STATE MACHINE
-//=============================================================================
+// ==============================================================================
+// GLOBAL VARIABLES
+// ==============================================================================
 
-// Permission and assignment flags
 bool traffic_permission = true;
-bool global_error_permission = true;
 bool current_assignment = true;
 int permitted_edge_speed = S0_5;
 bool column_detected_in_sweep = false;
 
-// Motor control variables
 int drive_motor_current_speed = 0;
 int drive_motor_previous_set_speed = 0;
 DriveMotorState drive_motor_current_state = DRIVE_MOTOR_STOP;
@@ -1057,18 +1026,408 @@ int drive_motor_sweep_speed = S0_05;
 int drive_motor_set_speed = 0;
 int drive_motor_direction_value = 1;
 bool drive_motor_error_status = false;
+int totalColumnsDetected = 0;
 
-//=============================================================================
-// GLOBAL VARIABLES - RTOS TASKS AND SYSTEM
-//=============================================================================
-
-Preferences prefs;
-TaskHandle_t sensorReadingTask;
-TaskHandle_t actuationTask;
 volatile bool firstTimeError = false;
 
-// Mutex for shared variable protection across cores
-SemaphoreHandle_t xDebugLogMutex;  // Protects debugLoggingString (accessed from Core 0 and Core 1)
+// Servo Limit Config variables.
+int front_diverter_left_limit = 0;
+int front_diverter_right_limit = 0;
+int front_diverter_tolerance = 0;
+int front_diverter_left_thresold = 0;
+int front_diverter_right_thresold = 0;
+
+int rear_diverter_left_limit = 0;
+int rear_diverter_right_limit = 0;
+int rear_diverter_tolerance = 0;
+int rear_diverter_left_thresold = 0;
+int rear_diverter_right_thresold = 0;
+
+int current_position_front_servo = 0;
+int current_position_rear_servo = 0;
+
+TaskHandle_t readingSensorAndUpdateStateTask;
+TaskHandle_t actuationTask;
+
+bool check_diverter_permission = true;
+
+// ==============================================================================
+// DIVERTER STATE MACHINE DEFINITIONS
+// ==============================================================================
+
+bool _photoTransistorCurrentStateArray[3] = { 0, 0, 0 };       // Array to store current state of sensors, either 0 or 1 based on threshold during station reading
+bool _photoTransistorPreviousStateArray[3] = { 0, 0, 0 };      // Array to store previous state of sensors, mainily to check if state has changed or not.
+
+uint16_t _photoTransistorCurrentValueArray[3] = { 0, 0, 0 };   // Array to store the analog value sent by the sensor currently.
+
+String _intermediateColumnCode = "000";                        // String to store intermediate column codes in String format, mainly to detect when bot is changing columns.
+bool _readingInProcess = false;                                // Flag variable to keep track wether station reading has started and is in progress.
+String _finalColumnCodeArray[3] = { "000", "000", "000" };     // Array used to store the 3 columns of the station in string format.
+bool _rightStationDetected = false;                            // Flag variable to check if a station has been detected so that it can perform its next set of operations on the obtained data.
+String _previousIntermediateColumnCode = "000";
+String stationCode = "";      // String variable to store entire stationCode in string format
+String currentStation = "X";  // String variable to store the station Id, after converting the station code read into stationId
+
+String StationsArray[25] = { "000000000" };
+unordered_map<string, string> STATION_CODE_TO_STATION_ID_MAP = {
+  { "100011110", "D1" }, { "101110011", "D2" }, { "101110100", "D3" }, { "101011001", "D4" }, { "101011010", "D5" }, { "100011001", "D6" }, { "110101110", "D7" }, { "100010101", "D9" }, { "100101011", "D10" }, { "100101010", "D11" }, { "100101001", "D12" }, { "100110100", "D13" }, { "100101100", "D14" }, { "100101110", "D15" }, { "100110001", "D16" }, { "100110010", "D17" }, { "100110011", "D18" }, { "110010100", "I1" }, { "100010100", "I11" }, { "110101100", "I12" }
+};
+
+unordered_map<string, bool> STATION_ID_TO_DIRECTION_MAP = {
+  { "D1", 0 }, { "D2", 0 }, { "D3", 1 }, { "D4", 1 }, { "D5", 1 }, { "D6", 1 }, { "D7", 1 }, { "D9", 1 }, { "D10", 1 }, { "D11", 1 }, { "D12", 1 }, { "D13", 1 }, { "D14", 1 }, { "D15", 1 }, { "D16", 1 }, { "D17", 1 }, { "D18", 1 }, { "I1", 1 }, { "I11", 0 }, { "I12", 1 }
+};
+
+unordered_map<string, string> STATION_ID_TO_EXPECTED_STATION_ID_MAP = {
+  { "D1", "I1" }, { "D2", "D3" }, { "D3", "D4" }, { "D4", "D5" }, { "D5", "D6" }, { "D6", "D7" }, { "D7", "D9" }, { "D9", "D10" }, { "D10", "D11" }, { "D11", "D12" }, { "D12", "D13" }, { "D13", "D14" }, { "D14", "D15" }, { "D15", "D16" }, { "D16", "D17" }, { "D17", "D18" }, { "D18", "D1" }, { "I1", "I12" }, { "I11", "D2" }, { "I12", "I11" }
+};
+
+unordered_map<string, int> STATION_ID_TO_SPEED_MAP = {
+  { "D1", S1 }, { "D2", S2 }, { "D3", S2 }, { "D4", S2 }, { "D5", S2 }, { "D6", S2 }, { "D7", S2 }, { "D9", S2 }, { "D10", S2 }, { "D11", S2 }, { "D12", S2 }, { "D13", S2 }, { "D14", S2 }, { "D15", S2 }, { "D16", S2 }, { "D17", S2 }, { "D18", S2 }, { "I1", S0_3 }, { "I11", S1 }, { "I12", S0_05 }
+};
+
+String expectedStation = "X";
+bool localisationFlag = true;
+volatile bool errorMode = false;
+volatile int errorCode = -1;
+
+int _intermediateColumnFramesCount = 0;
+int _instantaneousFramesCount = 0;
+uint16_t _instantaneousIntensityMaxArray[3] = { 0 };
+uint16_t _instantaneousIntensityMinArray[3] = { 1023 };
+unsigned long stationReadStartTime;
+int columnNo = 0;
+
+const static int SR_D1 = 36;  // ESP32 pin attached to Photo diode 1
+const static int SR_D2 = 39;  // ESP32 pin attached to Photo diode 2
+const static int SR_D3 = 34;  // ESP32 pin attached to Photo diode 3
+const static uint16_t PT_UPPER_THR_LIMIT = 600;  // Threshold limit for rising photo diode reading.
+const static uint16_t PT_LOWER_THR_LIMIT = 400;  // Threshold limit for falling photo diode reading
+
+portMUX_TYPE setSpeedMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE checkForCorrectionMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE checkForStopConditionMux = portMUX_INITIALIZER_UNLOCKED;
+
+volatile bool diverterDirection;
+bool previousDirection;
+portMUX_TYPE diverterDirectionMux = portMUX_INITIALIZER_UNLOCKED;
+int previousSetSpeed;
+portMUX_TYPE currentStationMux = portMUX_INITIALIZER_UNLOCKED;
+bool beep_flag = false;
+
+String dropoffStation = "X";
+bool getDestinationAPIFlag = false;
+bool clearInfeedAPIFlag = false;
+bool startInfeedAPIColumnCounter = false;
+int infeedAPIcolumnCounter = 0;
+bool previousCIStateForInfeedAPI = false;
+
+bool closingFlap = false;
+unsigned long startClosingTime;
+
+bool updateParcelDroppedInTheDumpAPIFlag = false;
+bool updateParcelDroppedAPIFlag = false;
+
+bool startColumnCounter = false;
+int columnCounter = 0;
+bool previousCIState = 0;
+
+TaskHandle_t apiTask;
+const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
+HTTPClient _http;
+
+void CloseFlap() {
+  digitalWrite(EMG_PIN, HIGH);    // Turn ON the electromagnets
+  digitalWrite(AFC_PIN_1, LOW);
+  digitalWrite(AFC_PIN_2, HIGH);
+}
+
+void OpenFlap() {
+  digitalWrite(EMG_PIN, LOW);
+}
+
+void StageFlap() {
+  digitalWrite(AFC_PIN_1, HIGH);
+  digitalWrite(AFC_PIN_2, LOW);
+}
+
+void ReadStationViaPhotoDiode() {
+  for (int i = 0; i < 3; i++) {
+    _photoTransistorPreviousStateArray[i] = _photoTransistorCurrentStateArray[i];
+    switch (i) {
+      case 0:
+        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D1), 0, 4096, 0, 1024);
+        break;
+      case 1:
+        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D2), 0, 4096, 0, 1024);
+        break;
+      case 2:
+        _photoTransistorCurrentValueArray[i] = map(analogRead(SR_D3), 0, 4096, 0, 1024);
+        break;
+    }
+    if (_photoTransistorCurrentValueArray[i] > PT_UPPER_THR_LIMIT) {
+      _photoTransistorCurrentStateArray[i] = 1;
+    } else if (_photoTransistorCurrentValueArray[i] < PT_LOWER_THR_LIMIT) {
+      _photoTransistorCurrentStateArray[i] = 0;
+    }
+  }
+}
+
+void CheckColumnIntensityWarningLevel(String segment) {
+  // Loop through each bit of the segment
+  for (int i = 0; i < 3; i++) {
+    int bit = segment[i] - '0';
+    int intensityMax = _instantaneousIntensityMaxArray[i];
+    int intensityMin = _instantaneousIntensityMinArray[i];
+    String status = "Healthy";
+
+    if (bit == 1) {
+      if (intensityMax >= 800)
+        status = "Healthy";
+      else if (intensityMax >= 700 && intensityMax < 800)
+        status = "Warning";
+      else
+        status = "Critical";
+    } else { // bit == 0
+      if (intensityMin <= 200)
+        status = "Healthy";
+      else if (intensityMin > 200 && intensityMin <= 300)
+        status = "Warning";
+      else
+        status = "Critical";
+    }
+
+    if (status != "Healthy") {
+      // add_log("Photodiode " + String(i + 1) + ": " + status);
+    }
+  }
+}
+
+void ReinitialiseVariables() {
+  for (int i = 0 ; i < 3 ; i++) {
+    _photoTransistorPreviousStateArray[i] = 0;
+    _finalColumnCodeArray[i] = "000";
+    _photoTransistorCurrentValueArray[i] = 0;
+    _photoTransistorCurrentStateArray[i] = 0;
+  }
+  _intermediateColumnCode = "000";
+  _previousIntermediateColumnCode = "000";
+  columnNo = 0;
+}
+
+String GetStationCodeFromDataReadByStationSensor() {
+  String instColumnCode = String(_photoTransistorCurrentStateArray[0]) + String(_photoTransistorCurrentStateArray[1]) + String(_photoTransistorCurrentStateArray[2]);
+  String prevInstColumnCode = String(_photoTransistorPreviousStateArray[0]) + String(_photoTransistorPreviousStateArray[1]) + String(_photoTransistorPreviousStateArray[2]);
+  if (instColumnCode == prevInstColumnCode) {
+    _instantaneousFramesCount++;
+    for (int i = 0 ; i < 3 ; i++) {
+      _instantaneousIntensityMaxArray[i] = max(_instantaneousIntensityMaxArray[i], _photoTransistorCurrentValueArray[i]);
+      _instantaneousIntensityMinArray[i] = min(_instantaneousIntensityMinArray[i], _photoTransistorCurrentValueArray[i]);
+    }
+  } else {
+    // add_log("Inst. Col: " + prevInstColumnCode);
+    // add_log("Inst. FC: " + String(_instantaneousFramesCount));
+    // add_log("Inst. Max. Intensity: { " + String(_instantaneousIntensityMaxArray[0]) + ", " + String(_instantaneousIntensityMaxArray[1]) + ", " + String(_instantaneousIntensityMaxArray[2]) + " }");
+    // add_log("Inst. Min. Intensity: { " + String(_instantaneousIntensityMinArray[0]) + ", " + String(_instantaneousIntensityMinArray[1]) + ", " + String(_instantaneousIntensityMinArray[2]) + " }");
+    CheckColumnIntensityWarningLevel(prevInstColumnCode);
+    _instantaneousFramesCount = 1;
+    for (int i = 0 ; i < 3 ; i++) {
+      _instantaneousIntensityMaxArray[i] = _photoTransistorCurrentValueArray[i];
+      _instantaneousIntensityMinArray[i] = _photoTransistorCurrentValueArray[i];
+    }
+  }
+
+  if (instColumnCode == "111") {
+    _intermediateColumnCode = instColumnCode;
+  }
+
+  // START STATION READING
+  if (!_readingInProcess && instColumnCode == "111") {
+    _readingInProcess = true;
+    stationReadStartTime = millis();
+    // // Serial.println("Detection Started");
+  }
+
+  // STATION READING COMPLETED
+  String stationCode;
+  if (instColumnCode == "000" && _readingInProcess) {
+    if (_finalColumnCodeArray[2] != "000" && _finalColumnCodeArray[1] != "000" && _finalColumnCodeArray[0] != "000") {
+      stationCode = _finalColumnCodeArray[2] + _finalColumnCodeArray[1] + _finalColumnCodeArray[0];
+      _rightStationDetected = true;
+      _readingInProcess = false;
+      // // Serial.println("Detection Completed");
+    }
+    // add_log("Read time: " + String(millis() - stationReadStartTime));
+    // if (columnNo < 3) add_log("Bot has skipped " + String(3 - columnNo) + " columns");
+    ReinitialiseVariables();
+  }
+
+  // OPEN ZONE TRAVEL
+  if (instColumnCode == "000") {
+    _readingInProcess = false;
+  }
+
+  if (_readingInProcess) {
+    int currentStateSum = _photoTransistorCurrentStateArray[0] + _photoTransistorCurrentStateArray[1] + _photoTransistorCurrentStateArray[2];
+    int prevStateSum = _photoTransistorPreviousStateArray[0] + _photoTransistorPreviousStateArray[1] + _photoTransistorPreviousStateArray[2];
+    if (currentStateSum < prevStateSum) {
+      _intermediateColumnCode = instColumnCode;
+      _intermediateColumnFramesCount = 1;
+    } else if (_intermediateColumnCode == instColumnCode) {
+      // Nothing
+      if (currentStateSum > 0 && currentStateSum < 3) {
+        _intermediateColumnFramesCount++;
+      }
+    }
+
+    if (_previousIntermediateColumnCode != "000" && _previousIntermediateColumnCode != "111" && _intermediateColumnCode == "111" && _intermediateColumnCode != "000" && _finalColumnCodeArray[0] != _previousIntermediateColumnCode) {
+      if (_intermediateColumnFramesCount >= 5) {
+        _finalColumnCodeArray[2] = _finalColumnCodeArray[1];
+        _finalColumnCodeArray[1] = _finalColumnCodeArray[0];
+        _finalColumnCodeArray[0] = _previousIntermediateColumnCode;
+        columnNo++;
+        // add_log("Col No.: " + String(columnNo));
+        // if (columnNo > 3) add_log("Bot is reading more than 3 columns");
+      } else {
+        // add_log("Potential fluke column. No. of frames: " + String(_intermediateColumnFramesCount));
+      }
+      // add_log("Inter. Col: " + _previousIntermediateColumnCode);
+      // add_log("Inter. FC: " + String(_intermediateColumnFramesCount));
+    }
+    _previousIntermediateColumnCode = _intermediateColumnCode;
+  }
+
+  String stationCodeMain = "";
+  if (_rightStationDetected) {
+    _rightStationDetected = false;
+    stationCodeMain = stationCode;
+  }
+  return stationCodeMain;
+}
+
+String TransformStationCodeIntoStationId(const String &stationCode) {
+  // Check if the station code is present in the StationCodeToId map
+  string stationCodeString = string(stationCode.c_str());
+  if (STATION_CODE_TO_STATION_ID_MAP.find(stationCodeString) != STATION_CODE_TO_STATION_ID_MAP.end()) {
+    string stationID = STATION_CODE_TO_STATION_ID_MAP.at(stationCodeString);
+    return String(stationID.c_str());
+  }
+  return "";
+}
+
+bool CheckStationValidity(const String &stationCode) {
+  // Check if the station-code is present in the keys of STATION_CODE_TO_STATION_ID hash-map
+  string stationCodeString = string(stationCode.c_str());
+  return STATION_CODE_TO_STATION_ID_MAP.find(stationCodeString) != STATION_CODE_TO_STATION_ID_MAP.end();
+}
+
+String GetExpectedStationFromStationId(const String &stationCode) {
+  // Check if the station code is present in the StationCodeToId map
+  string stationCodeString = string(stationCode.c_str());
+  if (STATION_ID_TO_EXPECTED_STATION_ID_MAP.find(stationCodeString) != STATION_ID_TO_EXPECTED_STATION_ID_MAP.end()) {
+    string stationID = STATION_ID_TO_EXPECTED_STATION_ID_MAP.at(stationCodeString);
+    return String(stationID.c_str());
+  }
+  return "";
+}
+
+bool GetDirectionFromStationId(const String &stationCode) {
+  // Check if the station code is present in the StationCodeToId map
+  string stationCodeString = string(stationCode.c_str());
+  if (STATION_ID_TO_DIRECTION_MAP.find(stationCodeString) != STATION_ID_TO_DIRECTION_MAP.end()) {
+    bool direction = STATION_ID_TO_DIRECTION_MAP.at(stationCodeString);
+    return direction;
+  }
+  return 1;
+}
+
+int GetSetSpeedAsPerStation(const String &stationId) {
+  // Check if the station code is present in the StationCodeToId map
+  string stationCodeString = string(stationId.c_str());
+  if (STATION_ID_TO_SPEED_MAP.find(stationCodeString) != STATION_ID_TO_SPEED_MAP.end()) {
+    int speed = STATION_ID_TO_SPEED_MAP.at(stationCodeString);
+    return speed;
+  }
+  return S0_5;
+}
+
+// ==============================================================================
+// GLOBAL VARIABLES - DIVERTER STATE MACHINE
+// ==============================================================================
+
+// Position thresholds (encoder counts)
+int left_threshold = 1000;
+int right_threshold = 2000;
+int left_position_tolerance = 100;   // +/- tolerance for left position
+int right_position_tolerance = 100;  // +/- tolerance for right position
+
+// Shared variables
+bool global_error_status = false;
+DiverterDirection diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
+DiverterDirection previous_diverter_track_edge_direction = DIVERTER_DIRECTION_UNKNOWN;
+volatile DiverterPosition current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
+
+// State machine variables
+DiverterState diverter_current_state = DIVERTER_STOP;
+DiverterState diverter_previous_state = DIVERTER_STOP;
+volatile bool error_diverter_status = false;
+bool diverter_set_torque_flag = true;
+bool prev_diverter_set_torque_flag = true;
+int front_diverter_set_position_value = -1;
+int rear_diverter_set_position_value = -1;
+int prev_front_diverter_set_position_value = -1;
+int prev_rear_diverter_set_position_value = -1;
+
+
+// Actual position from encoder
+int front_diverter_current_position = -1;
+volatile int front_diverter_previous_set_position = -1;
+int rear_diverter_current_position = -1;
+volatile int rear_diverter_previous_set_position = -1;
+
+// Auxiliary task variables
+unsigned long last_toggle_time = 0;
+const unsigned long TOGGLE_INTERVAL = 10000;  // 10 s
+
+portMUX_TYPE current_diverter_position_high_level_mux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE error_diverter_status_mux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE diverter_set_position_value_mux = portMUX_INITIALIZER_UNLOCKED;
+
+int previous_permitted_edge_speed = -1;
+
+// ==============================================================================
+// HELPER FUNCTIONS
+// ==============================================================================
+
+// Convert enum to string functions
+String DiverterStateToString(DiverterState state) {
+  switch(state) {
+    case DIVERTER_LEFT: return "LEFT";
+    case DIVERTER_RIGHT: return "RIGHT";
+    case DIVERTER_SWITCHING: return "SWITCHING";
+    case DIVERTER_ERROR: return "ERROR";
+    case DIVERTER_STOP: return "STOP";
+    default: return "UNKNOWN";
+  }
+}
+
+String DiverterDirectionToString(DiverterDirection dir) {
+  switch(dir) {
+    case DIVERTER_DIRECTION_LEFT: return "LEFT";
+    case DIVERTER_DIRECTION_RIGHT: return "RIGHT";
+    case DIVERTER_DIRECTION_UNKNOWN: return "UNKNOWN";
+    default: return "UNKNOWN";
+  }
+}
+
+String DiverterPositionToString(DiverterPosition pos) {
+  switch(pos) {
+    case DIVERTER_POSITION_LEFT: return "LEFT";
+    case DIVERTER_POSITION_RIGHT: return "RIGHT";
+    case DIVERTER_POSITION_INTERIM: return "INTERIM";
+    case DIVERTER_POSITION_UNKNOWN: return "UNKNOWN";
+    default: return "UNKNOWN";
+  }
+}
 
 // Function to read TI and CI sensor combo
 String ReadSensorCombo() {
@@ -1077,11 +1436,7 @@ String ReadSensorCombo() {
   return String(trafficDetected) + String(columnDetected);
 }
 
-//=============================================================================
-// COLUMN DETECTION STATE MACHINE
-//=============================================================================
-
-// Process column detection state machine
+// Function to handle column detection and processing
 void ProcessColumnDetection(String combo) {
   // Column detection state machine
   switch (wtm_column_state) {
@@ -1150,7 +1505,7 @@ void ProcessColumnDetection(String combo) {
         if (exitConfirmationCount >= EXIT_CONFIRMATION_THRESHOLD) {
           // Validate minimum frames threshold
           if (totalFramesBetweenSpaces < MIN_COLUMN_FRAMES_THRESHOLD) {
-            add_log("Fluke: " + String(totalFramesBetweenSpaces) + "f (01:" + String(frameCount01) + ",10:" + String(frameCount10) + ",11:" + String(frameCount11) + ") Rec:" + String(emptySpaceFrameCount + exitConfirmationCount));
+            // add_log("Fluke: " + String(totalFramesBetweenSpaces) + "f (01:" + String(frameCount01) + ",10:" + String(frameCount10) + ",11:" + String(frameCount11) + ") Rec:" + String(emptySpaceFrameCount + exitConfirmationCount));
             
             emptySpaceFrameCount += EXIT_CONFIRMATION_THRESHOLD;
             emptySpaceTotalFrameCount = emptySpaceFrameCount + totalFramesBetweenSpaces;
@@ -1171,7 +1526,7 @@ void ProcessColumnDetection(String combo) {
             emptySpaceMinorityHealth = CalculateMinorityHealth(emptySpaceNoiseFrameCount, emptySpaceTotalFrameCount);
             emptySpaceHealth = GetWorstHealth(emptySpaceMajorityHealth, emptySpaceMinorityHealth);
             
-            add_log("TES:" + String(totalEmptySpacesDetected) + " ES" + String(emptySpacesDetectedInSegment) + ":" + String(emptySpaceFrameCount) + "f " + HealthToString(emptySpaceHealth));
+            // add_log("TES:" + String(totalEmptySpacesDetected) + " ES" + String(emptySpacesDetectedInSegment) + ":" + String(emptySpaceFrameCount) + "f " + HealthToString(emptySpaceHealth));
             emptySpaceNoiseFrameCount = 0;
           }
           
@@ -1196,45 +1551,134 @@ void ProcessColumnDetection(String combo) {
   }
 }
 
-// Handle column-based decisions
+// Function to handle column-based decisions
 void HandleColumnDecisions() {
   if (columnJustCompleted) {
-    // Update sweep detection flag
     if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
       column_detected_in_sweep = true;
     }
-    
-    // Update traffic permission based on column code
     if (lastCompletedColumnCode == "11") {
-      add_log("Traffic Detected");
+      // add_log("Traffic Detected");
       traffic_permission = false;
     } else if (lastCompletedColumnCode == "01") {
-      add_log("Traffic Not Detected");
+      // add_log("Traffic Not Detected");
       traffic_permission = true;
     } else if (lastCompletedColumnCode == "10") {
-      add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
+      // add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
     }
     
     if (lastCompletedColumnHealth == CRITICAL) {
-      add_log("CRITICAL: Column health critical - maintenance may be required");
+      // Column health is critical - may need maintenance
     }
     
     columnJustCompleted = false;
   }
 }
 
-//=============================================================================
-// DRIVE MOTOR STATE MACHINE
-//=============================================================================
+unsigned long last_set_sweep_time = 0;
 
-// Update drive motor state based on global variables
+// ==============================================================================
+// DRIVE MOTOR STATE LOGGING - SMART PARAMETER TRACKING
+// ==============================================================================
+
+// Previous values for change detection
+struct DriveMotorStateSnapshot {
+    bool current_assignment;
+    bool traffic_permission;
+    int drive_motor_current_speed;
+    bool drive_motor_error_status;
+    bool global_error_status;
+    bool column_detected_in_sweep;
+    int permitted_edge_speed;
+    DriveMotorState current_state;
+    unsigned long timestamp;
+    bool error_mode;
+    bool check_diverter_permission;
+};
+
+DriveMotorStateSnapshot prev_dm_snapshot = {true, true, 0, false, false, false, 0, DRIVE_MOTOR_STOP, 0, false, true};
+unsigned long last_periodic_log_time = 0;
+const unsigned long PERIODIC_LOG_INTERVAL = 5000; // Log every 5 seconds
+
+const char* GetDriveMotorStateName(DriveMotorState state) {
+    switch(state) {
+        case DRIVE_MOTOR_STOP: return "STOP";
+        case DRIVE_MOTOR_STOPPING: return "STOPPING";
+        case DRIVE_MOTOR_RUNNING: return "RUNNING";
+        case DRIVE_MOTOR_SWEEPING_COLUMN: return "SWEEP";
+        case DRIVE_MOTOR_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
+void LogDriveMotorStateParams(bool forceLog = false) {
+    // Check if any critical parameter changed
+    bool paramChanged = (
+        // prev_dm_snapshot.current_assignment != current_assignment ||
+        // prev_dm_snapshot.traffic_permission != traffic_permission ||
+        // prev_dm_snapshot.drive_motor_current_speed != drive_motor_current_speed ||
+        // prev_dm_snapshot.drive_motor_error_status != drive_motor_error_status ||
+        // prev_dm_snapshot.global_error_status != global_error_status ||
+        // prev_dm_snapshot.column_detected_in_sweep != column_detected_in_sweep ||
+        // prev_dm_snapshot.permitted_edge_speed != permitted_edge_speed ||
+        // prev_dm_snapshot.current_state != drive_motor_current_state ||
+        // prev_dm_snapshot.error_mode != errorMode
+        prev_dm_snapshot.check_diverter_permission != check_diverter_permission
+    );
+    
+    // Periodic logging (every 5 seconds) or on parameter change
+    unsigned long currentTime = millis();
+    if (forceLog || paramChanged || (currentTime - last_periodic_log_time >= PERIODIC_LOG_INTERVAL)) {
+        String logMsg = "DM[" + String(GetDriveMotorStateName(drive_motor_current_state));
+        if (drive_motor_current_state != drive_motor_previous_state) {
+            logMsg += "←" + String(GetDriveMotorStateName(drive_motor_previous_state));
+        }
+        logMsg += "] Assn:" + String(current_assignment) + 
+                       " Traf:" + String(traffic_permission) + 
+                       " Spd:" + String(drive_motor_current_speed) + 
+                       " Err:" + String(drive_motor_error_status) + 
+                       " GErr:" + String(global_error_status) + 
+                       " ColSwp:" + String(column_detected_in_sweep) + 
+                       " EdgeSpd:" + String(permitted_edge_speed) + 
+                       " EMode:" + String(errorMode) +
+                       " ChkDivPerm:" + String(check_diverter_permission);
+        
+        // Only add change indicator if it's due to parameter change, not periodic
+        if (paramChanged && !forceLog) {
+            logMsg += " [CHG]";
+        } else if (!paramChanged && !forceLog) {
+            logMsg += " [PER]";
+        }
+        
+        add_log(logMsg);
+        
+        // Update snapshot
+        prev_dm_snapshot.current_assignment = current_assignment;
+        prev_dm_snapshot.traffic_permission = traffic_permission;
+        prev_dm_snapshot.drive_motor_current_speed = drive_motor_current_speed;
+        prev_dm_snapshot.drive_motor_error_status = drive_motor_error_status;
+        prev_dm_snapshot.global_error_status = global_error_status;
+        prev_dm_snapshot.column_detected_in_sweep = column_detected_in_sweep;
+        prev_dm_snapshot.permitted_edge_speed = permitted_edge_speed;
+        prev_dm_snapshot.current_state = drive_motor_current_state;
+        prev_dm_snapshot.timestamp = currentTime;
+        prev_dm_snapshot.error_mode = errorMode;
+        prev_dm_snapshot.check_diverter_permission = check_diverter_permission;
+        
+        last_periodic_log_time = currentTime;
+    }
+}
+
 DriveMotorStateOutput UpdateDriveMotorState() {
     /*
     Evaluates global variables and determines if state should change
     Updates Current_State based on conditions and valid transitions
     Returns: true if state was changed, false if no change
     */
-    drive_motor_previous_state = drive_motor_current_state;    
+    drive_motor_previous_state = drive_motor_current_state;
+    
+    // Log parameters before evaluation (smart logging - only when changed or periodic)
+    LogDriveMotorStateParams();    
     // ----- FROM STOP STATE -----
     if (drive_motor_current_state == DRIVE_MOTOR_STOP) {
         // Transition to ERROR_MOTOR
@@ -1250,8 +1694,9 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         }
         
         // Transition to SWEEPING_COLUMN
-        if (current_assignment == true && drive_motor_current_speed == 0 && traffic_permission == false && global_error_status == false) {
+        if (current_assignment == true && drive_motor_current_speed == 0 && traffic_permission == false && global_error_status == false && millis() - last_set_sweep_time >= 1000) {
             drive_motor_current_state = DRIVE_MOTOR_SWEEPING_COLUMN;
+            last_set_sweep_time = millis();
             column_detected_in_sweep = false;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
@@ -1300,6 +1745,12 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         if (global_error_status == true || (current_assignment == true && traffic_permission == false)) {
             drive_motor_current_state = DRIVE_MOTOR_STOPPING;
             return DRIVE_MOTOR_STATE_CHANGED;
+        }
+
+        if (previous_permitted_edge_speed != permitted_edge_speed) {
+          drive_motor_current_state = DRIVE_MOTOR_RUNNING;
+          previous_permitted_edge_speed = permitted_edge_speed;
+          return DRIVE_MOTOR_STATE_CHANGED;
         }
         
         // Continue moving - remain in RUNNING
@@ -1356,26 +1807,38 @@ DriveMotorStateOutput UpdateDriveMotorState() {
     return DRIVE_MOTOR_UNKNOWN_STATE;  // No state change
 }
 
-// Implement state-specific actions
+// ==============================================================================
+// STATE IMPLEMENTER / ACTUATOR
+// ==============================================================================
+
+// Execute state actions when update_state() returns true
 void ImplementDriveMotorState() {
-    String log_msg = "";
+    /*
+    Executes the actions required for the current state
+    */
     
     if (drive_motor_current_state == DRIVE_MOTOR_STOP) {
         // ===== STOP STATE =====
         drive_motor_set_speed = 0;
-        log_msg = "Stopping the bot.";
+        // add_log("Stopping the bot.");
     }
+    
+    
     else if (drive_motor_current_state == DRIVE_MOTOR_STOPPING) {
         // ===== STOPPING STATE =====
         drive_motor_set_speed = 0;
-        log_msg = "Stopping the bot.";
+        // add_log("Stopping the bot.");
     }
+    
+    
     else if (drive_motor_current_state == DRIVE_MOTOR_RUNNING) {
         // ===== RUNNING STATE =====
         drive_motor_set_speed = permitted_edge_speed;
         drive_motor_current_direction = DRIVE_MOTOR_FORWARD; // Reset current direction
-        log_msg = "Running the bot at speed: " + String(drive_motor_set_speed);
+        // add_log("Running the bot at speed: " + drive_motor_set_speed);
     }
+    
+    
     else if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
         // ===== SWEEPING COLUMN STATE =====
         
@@ -1397,114 +1860,51 @@ void ImplementDriveMotorState() {
         
         // Set speed with direction
         drive_motor_set_speed = drive_motor_sweep_speed * drive_motor_direction_value;
-        log_msg = "Sweeping column at speed: " + String(drive_motor_sweep_speed) + " in direction: " + String(drive_motor_direction_value);
+        // add_log("Sweeping column at speed: " + String(drive_motor_sweep_speed) + " in direction: " + String(drive_motor_direction_value));
     }
+    
+    
     else if (drive_motor_current_state == DRIVE_MOTOR_ERROR) {
         // ===== ERROR_MOTOR STATE =====
         drive_motor_set_speed = 0;
-        log_msg = "Drive motor error detected! Halting the bot.";
-    }
-    
-    if (log_msg != "") {
-        add_log(log_msg);
+        // add_log("Drive motor error detected! Halting the bot.");
     }
 }
 
-//=============================================================================
-// DIVERTER MODULE
-//=============================================================================
-SMS sm;
+// Update high-level position based on current encoder position
+void UpdateDiverterPositionHighLevel() {
+  if (front_diverter_current_position >= (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position <= front_diverter_right_limit &&
+  rear_diverter_current_position <= (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position >= rear_diverter_right_limit) {
 
-// Servo Limit Config variables.
-int front_diverter_left_limit = 0;
-int front_diverter_right_limit = 0;
-int front_diverter_tolerance = 0;
-int front_diverter_left_thresold = 0;
-int front_diverter_right_thresold = 0;
+    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
+    current_diverter_position_high_level = DIVERTER_POSITION_RIGHT;
+    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+  }
 
-int rear_diverter_left_limit = 0;
-int rear_diverter_right_limit = 0;
-int rear_diverter_tolerance = 0;
-int rear_diverter_left_thresold = 0;
-int rear_diverter_right_thresold = 0;
+  else if (front_diverter_current_position >= front_diverter_left_limit && front_diverter_current_position <= (front_diverter_left_thresold + front_diverter_tolerance)  &&
+  rear_diverter_current_position <= rear_diverter_left_limit && rear_diverter_current_position >= (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
+    current_diverter_position_high_level = DIVERTER_POSITION_LEFT;
+    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+  }
 
-int current_position_front_servo = 0;
-int current_position_rear_servo = 0;
+  else if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance) &&
+  rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
+    current_diverter_position_high_level = DIVERTER_POSITION_INTERIM;
+    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+  }
 
-// ==============================================================================
-// GLOBAL VARIABLES - DIVERTER STATE MACHINE
-// ==============================================================================
-
-// Position thresholds (encoder counts)
-int left_threshold = 1000;
-int right_threshold = 2000;
-int left_position_tolerance = 100;   // +/- tolerance for left position
-int right_position_tolerance = 100;  // +/- tolerance for right position
-
-// Shared variables
-DiverterDirection diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
-volatile DiverterPosition current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
-
-// State machine variables
-DiverterState diverter_current_state = DIVERTER_STOP;
-DiverterState diverter_previous_state = DIVERTER_STOP;
-volatile bool error_diverter_status = false;
-bool diverter_set_torque_flag = true;
-bool prev_diverter_set_torque_flag = true;
-int front_diverter_set_position_value = -1;
-int rear_diverter_set_position_value = -1;
-int prev_front_diverter_set_position_value = -1;
-int prev_rear_diverter_set_position_value = -1;
-
-
-// Actual position from encoder
-int front_diverter_current_position = -1;
-volatile int front_diverter_previous_set_position = -1;
-int rear_diverter_current_position = -1;
-volatile int rear_diverter_previous_set_position = -1;
-
-// Auxiliary task variables
-unsigned long last_toggle_time = 0;
-const unsigned long TOGGLE_INTERVAL = 10000;  // 10 s
-
-portMUX_TYPE current_diverter_position_high_level_mux = portMUX_INITIALIZER_UNLOCKED;
-portMUX_TYPE error_diverter_status_mux = portMUX_INITIALIZER_UNLOCKED;
-portMUX_TYPE diverter_set_position_value_mux = portMUX_INITIALIZER_UNLOCKED;
-
-// ==============================================================================
-// HELPER FUNCTIONS
-// ==============================================================================
-
-// Convert enum to string functions
-String DiverterStateToString(DiverterState state) {
-  switch(state) {
-    case DIVERTER_LEFT: return "LEFT";
-    case DIVERTER_RIGHT: return "RIGHT";
-    case DIVERTER_SWITCHING: return "SWITCHING";
-    case DIVERTER_ERROR: return "ERROR";
-    case DIVERTER_STOP: return "STOP";
-    default: return "UNKNOWN";
+  else {
+    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
+    current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
+    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
   }
 }
 
-String DiverterDirectionToString(DiverterDirection dir) {
-  switch(dir) {
-    case DIVERTER_DIRECTION_LEFT: return "LEFT";
-    case DIVERTER_DIRECTION_RIGHT: return "RIGHT";
-    case DIVERTER_DIRECTION_UNKNOWN: return "UNKNOWN";
-    default: return "UNKNOWN";
-  }
-}
-
-String DiverterPositionToString(DiverterPosition pos) {
-  switch(pos) {
-    case DIVERTER_POSITION_LEFT: return "LEFT";
-    case DIVERTER_POSITION_RIGHT: return "RIGHT";
-    case DIVERTER_POSITION_INTERIM: return "INTERIM";
-    case DIVERTER_POSITION_UNKNOWN: return "UNKNOWN";
-    default: return "UNKNOWN";
-  }
-}
+// ==============================================================================
+// STATE UPDATE FUNCTION
+// ==============================================================================
 
 DiverterStateChangeOptions UpdateDiverterState() {
   /*
@@ -1513,6 +1913,24 @@ DiverterStateChangeOptions UpdateDiverterState() {
   Returns: state change status
   */
   diverter_previous_state = diverter_current_state;
+
+  if (currentStation == "D1" || currentStation == "I1" || currentStation == "I11") {
+    if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
+      if (current_diverter_position_high_level == DIVERTER_POSITION_RIGHT) {
+        check_diverter_permission = true;
+      } else {
+        check_diverter_permission = false;
+      }
+    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
+      if (current_diverter_position_high_level == DIVERTER_POSITION_LEFT) {
+        check_diverter_permission = true;
+      } else {
+        check_diverter_permission = false;
+      }
+    }
+  } else {
+    check_diverter_permission = true;
+  }
   
   // ----- FROM LEFT STATE -----
   if (diverter_current_state == DIVERTER_LEFT) {
@@ -1598,6 +2016,12 @@ DiverterStateChangeOptions UpdateDiverterState() {
       diverter_current_state = DIVERTER_RIGHT;
       return DIVERTER_STATE_CHANGED;
     }
+
+    if (previous_diverter_track_edge_direction != diverter_track_edge_direction) {
+      diverter_current_state = DIVERTER_SWITCHING;
+      previous_diverter_track_edge_direction = diverter_track_edge_direction;
+      return DIVERTER_STATE_CHANGED;
+    }
     
     // Continue switching - remain in SWITCHING
     diverter_current_state = DIVERTER_SWITCHING;
@@ -1640,6 +2064,10 @@ DiverterStateChangeOptions UpdateDiverterState() {
   return DIVERTER_UNEXPECTED_CONDITION;
 }
 
+// ==============================================================================
+// STATE IMPLEMENTER / ACTUATOR
+// ==============================================================================
+
 void UpdateDiverterActuatorInputVariables() {
   /*
   Executes the actions required for the current state
@@ -1679,50 +2107,294 @@ void UpdateDiverterActuatorInputVariables() {
   else if (diverter_current_state == DIVERTER_ERROR) {
     // ===== ERROR_DIVERTER STATE =====
     diverter_set_torque_flag = false;
-    // add_log("Diverter error detected! Torque disabled.");
+    add_log("Diverter error detected! Torque disabled.");
   }
   
   else if (diverter_current_state == DIVERTER_STOP) {
     // ===== STOP_DIVERTER STATE =====
     diverter_set_torque_flag = false;
-    // add_log("Diverter stopped - torque disabled.");
+    add_log("Diverter stopped - torque disabled.");
   }
 }
 
-// Update high-level position based on current encoder position
-void UpdateDiverterPositionHighLevel() {
-  if (front_diverter_current_position >= (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position <= front_diverter_right_limit &&
-  rear_diverter_current_position <= (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position >= rear_diverter_right_limit) {
+// ==============================================================================
+// RTOS TASKS
+// ==============================================================================
 
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_RIGHT;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
-  }
+// Diverter State Machine Task
+void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(1 / portTICK_PERIOD_MS);  // 10ms cycle time
+    global_error_status = error_diverter_status || drive_motor_error_status || errorMode;
 
-  else if (front_diverter_current_position >= front_diverter_left_limit && front_diverter_current_position <= (front_diverter_left_thresold + front_diverter_tolerance)  &&
-  rear_diverter_current_position <= rear_diverter_left_limit && rear_diverter_current_position >= (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_LEFT;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
-  }
+    ReadStationViaPhotoDiode();  // Function to read the analog values from the 3 photo diodes and assign a digital value depending upon the analog value is greeater than threshold or not, assign 1 if value greater than threshold upper limit, 0 is value lower than lower limit
 
-  else if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance) && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance) &&
-  rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance) && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_INTERIM;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
-  }
+    String stationCodeMain = GetStationCodeFromDataReadByStationSensor(); // generate the full station code in string format based on the columns read.
 
-  else {
-    portENTER_CRITICAL(&current_diverter_position_high_level_mux);
-    current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
-    portEXIT_CRITICAL(&current_diverter_position_high_level_mux);
+    if (stationCodeMain != "" && stationCodeMain.length() == 9) { // If station reading is complete only then function will be run, 2 conditions must be satisfied for station reading to be complete, all 3 columns must be read, only then length of stationcode string will be 9, also stationCode must not be empty for station reading to be complete
+      portENTER_CRITICAL(&currentStationMux);
+      currentStation = TransformStationCodeIntoStationId(stationCodeMain);
+      portEXIT_CRITICAL(&currentStationMux);
+      add_log("Current station: " + currentStation);
+      if (CheckStationValidity(stationCodeMain)) {
+        portENTER_CRITICAL(&diverterDirectionMux);
+        // changeDirection = true;
+        diverterDirection = GetDirectionFromStationId(currentStation);
+        if (diverterDirection) diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
+        else diverter_track_edge_direction = DIVERTER_DIRECTION_LEFT;
+        portEXIT_CRITICAL(&diverterDirectionMux);
+        add_log("Diverter direction changed to " + String(diverterDirection));
+        if (!localisationFlag) {
+          if (expectedStation != currentStation) {
+            errorCode = 3;
+            errorMode = true;
+            firstTimeError = true;
+          }
+        }
+        else {
+          localisationFlag = false;
+        }
+        if (!errorMode) {
+          int getSpeed = GetSetSpeedAsPerStation(currentStation);
+          permitted_edge_speed = getSpeed;
+          add_log("Speed should be changed to " + String(getSpeed));
+          expectedStation = GetExpectedStationFromStationId(currentStation);
+        }
+      } else {
+        add_log("Invalid station code: " + stationCodeMain);
+        errorCode = 4;
+        errorMode = true;
+        firstTimeError = true;
+      }
+    }
+
+    // Read TI/CI sensors and process column detection
+    int trafficDetected = !digitalRead(TRAFFIC_INDICATOR_SENSOR);
+    int columnDetected = !digitalRead(COLUMN_INDICATOR_SENSOR);
+    String combo = String(trafficDetected) + String(columnDetected);
+    ProcessColumnDetection(combo);
+    HandleColumnDecisions();
+
+    // ---------------------------------------------------------------- Infeed Controller --------------------------------------------------------
+    if (previousStation != currentStation) {
+      if (currentStation == "I12") {
+        startColumnCounter = true;
+      }
+    }
+    
+    if (columnDetected) {
+      if(!previousCIState) {
+        if (startColumnCounter) {
+          columnCounter++;
+          if(columnCounter >= 3) {
+            add_log("Actual speed changed after 3 columns");
+            permitted_edge_speed = S1;
+            // add_log("SET SPEED UPDATE TO: " + String(setSpeed) + " BCZ IT WILL START FROM INFEED STOP POINT");
+            beep_flag = true;
+            startColumnCounter = false;
+            columnCounter = 0;
+            startInfeedAPIColumnCounter = true;
+          }
+        }
+      }
+    }
+    previousCIState = columnDetected;
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    // ----------------------------------------------------------- Destination Controller --------------------------------------------------------
+    if (previousStation != currentStation) {
+      if(currentStation == dropoffStation) {
+        if (dropoffStation == "D18") {
+          updateParcelDroppedInTheDumpAPIFlag = true;
+        } else {
+          updateParcelDroppedAPIFlag = true;
+        }
+      }
+    }
+    
+    if (columnDetected) {
+      if(!previousCIStateForInfeedAPI) {
+        if (startInfeedAPIColumnCounter) {
+          if (drive_motor_current_direction == DRIVE_MOTOR_FORWARD) {
+            infeedAPIcolumnCounter++;
+          } else if (drive_motor_current_direction == DRIVE_MOTOR_REVERSE) {
+            infeedAPIcolumnCounter -= 2;
+          }
+          if(infeedAPIcolumnCounter >= 10) {
+            beep_flag = true;
+            getDestinationAPIFlag = true;
+            infeedAPIcolumnCounter = 0;
+            startInfeedAPIColumnCounter = false;
+          }
+        }
+      }
+    }
+    previousCIStateForInfeedAPI = columnDetected;
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    // --------------------------------------------------------------- AFC Controller ------------------------------------------------------------
+    if (previousStation != currentStation) {
+      if(currentStation == dropoffStation && dropoffStation != "X") {
+        add_log("Opening the flap");
+        OpenFlap();
+        closingFlap = true;
+        startClosingTime = millis();
+      } else if (currentStation == "I11") {
+        add_log("Staging the flap");
+        StageFlap();
+      }
+    }
+
+    if (closingFlap && millis() - startClosingTime >= 1000) {
+      add_log("Closing the flap");
+      CloseFlap();
+      closingFlap = false;
+    }
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    previousStation = currentStation;
+
+    if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
+      add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
+      // add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Status: " + String(global_error_status) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: ," + 
+                // String(column_detected_in_sweep));
+      ImplementDriveMotorState();
+    }
+    
+    DiverterStateChangeOptions stateChange = UpdateDiverterState();
+    if (stateChange != DIVERTER_STATE_NO_CHANGE) Serial.println(stateChange);
+    if (stateChange == DIVERTER_STATE_CHANGED) {
+      add_log("State changed to: " + DiverterStateToString(diverter_current_state) + " from " + DiverterStateToString(diverter_previous_state));
+      // add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + DiverterDirectionToString(diverter_track_edge_direction) + ", Pos_HL: " + DiverterPositionToString(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
+      // add_log("Front current position: " + String(front_diverter_current_position) + ", Rear current position: " + String(rear_diverter_current_position));
+      UpdateDiverterActuatorInputVariables();
+    } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
+      add_log("Diverter State Machine in UNEXPECTED CONDITION!");
+    }
   }
 }
 
-//=============================================================================
-// ARDUINO SETUP & LOOP
-//=============================================================================
+unsigned long lastDemandVelocityCheckTime = 0;
+
+// Actuation Task
+void ACTUATION_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+    // Update motor speed if changed
+    if (!diverter_set_torque_flag ) {
+      if (prev_diverter_set_torque_flag)
+      {
+        delay(1);
+        sm.EnableTorque(FRONT_SERVO, DISABLE);
+        if (sm.getLastError()) {
+          add_log("Front torque disabling communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+        delay(1);
+        sm.EnableTorque(REAR_SERVO, DISABLE);
+        if (sm.getLastError()) {
+          add_log("Rear torque disabling communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+      }
+    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
+      if (front_diverter_set_position_value != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
+        delay(1);
+        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+        if (sm.getLastError()) {
+          add_log("Front position write communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+      }
+
+      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
+        delay(1);
+        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+        if (sm.getLastError()) {
+          add_log("Rear position write communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+      }
+    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
+      if (front_diverter_set_position_value != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
+        delay(1);
+        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
+        if (sm.getLastError()) {
+          add_log("Front position write communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+      }
+
+      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+        delay(1);
+        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
+        if (sm.getLastError()) {
+          add_log("Rear position write communication failed!");
+          portENTER_CRITICAL(&error_diverter_status_mux);
+          error_diverter_status = true;
+          portEXIT_CRITICAL(&error_diverter_status_mux);
+        }
+      }
+    }
+    prev_diverter_set_torque_flag = diverter_set_torque_flag;
+    delay(1);
+    front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
+    if (sm.getLastError()) {
+      add_log("Front position read communication failed!");
+      portENTER_CRITICAL(&error_diverter_status_mux);
+      error_diverter_status = true;
+      portEXIT_CRITICAL(&error_diverter_status_mux);
+    }
+    delay(1);
+    rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
+    if (sm.getLastError()) {
+      add_log("Rear position read communication failed!");
+      portENTER_CRITICAL(&error_diverter_status_mux);
+      error_diverter_status = true;
+      portEXIT_CRITICAL(&error_diverter_status_mux);
+    }
+
+    UpdateDiverterPositionHighLevel();
+
+    // Update motor speed if changed
+    if (drive_motor_set_speed != drive_motor_previous_set_speed) {
+      CANStatus success = setTargetVelocity(drive_motor_set_speed);
+      if (success == CAN_OK) {
+        int32_t getSetVelocity;
+        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
+          if (getSetVelocity == drive_motor_set_speed) {
+            drive_motor_previous_set_speed = drive_motor_set_speed;
+          }
+        }
+      }
+    }
+
+    // Monitor drive motor current speed
+    int32_t current_velocity;
+    if (getVelocityActualValueAveraged(&current_velocity) == CAN_OK) {
+      drive_motor_current_speed = current_velocity;
+    }
+
+    if (beep_flag) {
+      Beep();
+      beep_flag = false;
+    }
+  }
+}
+
+// ==============================================================================
+// SETUP AND INITIALIZATION
+// ==============================================================================
 
 void setup() {
   // ===== 1. SERIAL COMMUNICATION (Foundation for debugging) =====
@@ -1835,12 +2507,12 @@ void setup() {
   
   // Create sensor reading task on Core 1
   xTaskCreatePinnedToCore(
-    SENSOR_READING_TASK,
-    "sensor_reading_task",
+    READING_SENSOR_AND_UPDATE_STATE_TASK,
+    "reading_sensor_and_update_state_task",
     6144,  // 6KB stack for state machine and column detection
     NULL,
     5,
-    &sensorReadingTask,
+    &readingSensorAndUpdateStateTask,
     1);
   
   vTaskDelay(pdMS_TO_TICKS(20));
@@ -1860,163 +2532,24 @@ void setup() {
   Serial.println("\n╔════════════════════════════════════════╗");
   Serial.println("║   System Ready - State Machine Active  ║");
   Serial.println("╚════════════════════════════════════════╝\n");
+
+  vTaskDelay(pdMS_TO_TICKS(20));
+  
+  xTaskCreatePinnedToCore(
+    API_TASK,
+    "api_task",
+    4096,
+    NULL,
+    3,
+    &apiTask,
+    0);
+  
+  last_toggle_time = millis();
 }
 
-// Main loop - empty as tasks handle all functionality
 void loop() {
-  delay(1000);  // Keep loop alive but idle
+  // Empty loop as tasks handle functionality
 }
-
-//=============================================================================
-// RTOS TASK IMPLEMENTATIONS
-//=============================================================================
-
-// Sensor reading task - runs on Core 1
-void SENSOR_READING_TASK(void* pvParameters) {
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(1));  // FIXED: 1ms delay (was 0 due to integer division)
-    global_error_status = error_diverter_status || drive_motor_error_status;
-    
-    // Read TI/CI sensors and process column detection
-    String combo = ReadSensorCombo();
-    ProcessColumnDetection(combo);
-    HandleColumnDecisions();
-
-    if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
-      add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
-      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: " + 
-                String(column_detected_in_sweep));
-      ImplementDriveMotorState();
-    }
-
-    DiverterStateChangeOptions stateChange = UpdateDiverterState();
-    if (stateChange != DIVERTER_STATE_NO_CHANGE) Serial.println(stateChange);
-    if (stateChange == DIVERTER_STATE_CHANGED) {
-      add_log("State changed to: " + DiverterStateToString(diverter_current_state) + " from " + DiverterStateToString(diverter_previous_state));
-      // add_log("Variables - Global_Error: " + String(global_error_status) + ", Demand_Dir: " + DiverterDirectionToString(diverter_track_edge_direction) + ", Pos_HL: " + DiverterPositionToString(current_diverter_position_high_level) + ", Error_Status: " + String(error_diverter_status));
-      // add_log("Front current position: " + String(front_diverter_current_position) + ", Rear current position: " + String(rear_diverter_current_position));
-      UpdateDiverterActuatorInputVariables();
-    } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
-      add_log("Diverter State Machine in UNEXPECTED CONDITION!");
-    }
-  }
-}
-
-// Actuation task - runs on Core 1 (same as sensor task, no mutex needed)
-void ACTUATION_TASK(void* pvParameters) {
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms 
-    
-    // Update motor speed if changed
-    if (!diverter_set_torque_flag ) {
-      if (prev_diverter_set_torque_flag)
-      {
-        delay(1);
-        sm.EnableTorque(FRONT_SERVO, DISABLE);
-        if (sm.getLastError()) {
-          add_log("Front torque disabling communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-        delay(1);
-        sm.EnableTorque(REAR_SERVO, DISABLE);
-        if (sm.getLastError()) {
-          add_log("Rear torque disabling communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-      }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
-      if (front_diverter_set_position_value != -1 && front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
-        delay(1);
-        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
-        if (sm.getLastError()) {
-          add_log("Front position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-      }
-
-      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
-        delay(1);
-        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
-        if (sm.getLastError()) {
-          add_log("Rear position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-      }
-    } else if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
-      if (front_diverter_set_position_value != -1 && front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
-        delay(1);
-        sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
-        if (sm.getLastError()) {
-          add_log("Front position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-      }
-
-      if (rear_diverter_set_position_value != -1 && rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-        delay(1);
-        sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
-        if (sm.getLastError()) {
-          add_log("Rear position write communication failed!");
-          portENTER_CRITICAL(&error_diverter_status_mux);
-          error_diverter_status = true;
-          portEXIT_CRITICAL(&error_diverter_status_mux);
-        }
-      }
-    }
-    prev_diverter_set_torque_flag = diverter_set_torque_flag;
-    delay(1);
-    front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
-    if (sm.getLastError()) {
-      add_log("Front position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
-    }
-    delay(1);
-    rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
-    if (sm.getLastError()) {
-      add_log("Rear position read communication failed!");
-      portENTER_CRITICAL(&error_diverter_status_mux);
-      error_diverter_status = true;
-      portEXIT_CRITICAL(&error_diverter_status_mux);
-    }
-
-    UpdateDiverterPositionHighLevel();
-
-    // Update motor speed if changed
-    if (drive_motor_set_speed != drive_motor_previous_set_speed) {
-      CANStatus success = setTargetVelocity(drive_motor_set_speed);
-      if (success == CAN_OK) {
-        int32_t getSetVelocity;
-        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
-          if (getSetVelocity == drive_motor_set_speed) {
-            drive_motor_previous_set_speed = drive_motor_set_speed;
-          }
-        }
-      }
-    }
-
-    // Monitor drive motor current speed
-    int32_t current_velocity;
-    if (getVelocityActualValueAveraged(&current_velocity) == CAN_OK) {
-      drive_motor_current_speed = current_velocity;
-    }
-  }
-}
-
-//=============================================================================
-// HEALTH MONITORING FUNCTIONS
-//=============================================================================
 
 // Calculate health status based on majority frame count
 HealthStatus CalculateMajorityHealth(int majorityCount, int threshold) {
@@ -2116,13 +2649,9 @@ HealthStatus AnalyzeWTMColumnHealth() {
   overallHealthWTM = GetWorstHealth(majorityHealthWTM, minorityHealthWTM);
   
   // Compact log for memory efficiency
-  add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
+  // add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
   return overallHealthWTM;
 }
-
-//=============================================================================
-// UTILITY AND SETUP FUNCTIONS
-//=============================================================================
 
 void printFileName() {
   Serial.println(__FILE__);
@@ -2148,13 +2677,16 @@ void LoadDiverterConfig() {
   Serial.println("Diverter config loaded from NVM.");
 }
 
-// Function to make ahardware beep for 250 ms
+void MCPConfig() {
+  if (!mcp.begin_I2C()) {
+    Serial.println("MCP Error.");
+  }
+}
+
 void Beep() {
   digitalWrite(BUZZER, HIGH);
-  // mcp.digitalWrite(PANEL_LED_PIN, HIGH);
   delay(250);
   digitalWrite(BUZZER, LOW);
-  // mcp.digitalWrite(PANEL_LED_PIN, LOW);
 }
 
 // Logger Function which will run as RTOS task
@@ -2205,15 +2737,118 @@ void WiFiConfig() {
   Serial.println("Connected to WiFi!");
 }
 
-// Setup the pin configuration
 void PinConfig() {
   pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);       // Traffic indicator pin config
   pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);      // Column indicator pin config
+
+  mcp.pinMode(PANEL_LED_BUTTON, INPUT_PULLUP);
+
+  pinMode(EMG_PIN, OUTPUT);
   pinMode(BUZZER, OUTPUT);
+
+  // GPIO command outputs to Secondary
+  pinMode(AFC_PIN_1, OUTPUT);
+  pinMode(AFC_PIN_2, OUTPUT);
+
+  digitalWrite(EMG_PIN, HIGH);
+  digitalWrite(AFC_PIN_1, LOW);
+  digitalWrite(AFC_PIN_2, LOW);
 }
 
 void ServoConfig() {
   sm.begin(&Serial2, 115200);
   sm.setTimeOut(100);
   Serial2.begin(115200, SERIAL_8N1, 25, 32);
+}
+
+void GetDestinationAndJourneyPath() {
+  String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=MyntraSingleScan&retries=0&sectionId=S1";
+  int httpCode = 0;
+  _http.begin(url);
+  add_log("API call!");
+  httpCode = _http.GET();
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+  } else {
+    add_log(_http.getString());
+  }
+  _http.end();
+  
+  if (response == "") {
+    dropoffStation = "D18";
+  } else {
+    int destinationIndex = response.indexOf('-');
+    dropoffStation = response.substring(0, destinationIndex);
+  }
+}
+
+void UpdateParcelDropped() {
+  String url = DMS_URL_PREFIX + "UpdateParcelDroppedForBot?botId=" + BOT_ID + "&sectionIds=S1&infeedStationId=I1";
+  int httpCode = 0;
+  _http.begin(url);
+  add_log("Update API call!");
+  httpCode = _http.PUT(url);
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+  } else {
+    add_log(_http.getString());
+  }
+  _http.end();
+}
+
+void UpdateParcelDroppedInTheDump() {
+  String url = DMS_URL_PREFIX + "UpdateParcelDroppedInDumpForBot?botId=" + BOT_ID + "&sectionIds=S1&infeedStationId=I1&reason=FailedDetection";
+  int httpCode = 0;
+  _http.begin(url);
+  add_log("API call!");
+  httpCode = _http.PUT(url);
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+  } else {
+    add_log(_http.getString());
+  }
+  _http.end();
+}
+
+void ClearInfeedStation() {
+  String url = DMS_URL_PREFIX + "ClearInfeedStations?infeedStationId=I1";
+  int httpCode = 0;
+  _http.begin(url);
+  while (httpCode != HTTP_CODE_OK) {
+    httpCode = _http.PUT(url);
+    delay(100);
+  }
+  _http.end();
+}
+
+// Logger Function which will run as RTOS task
+void API_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    if (getDestinationAPIFlag) {
+      GetDestinationAndJourneyPath();
+      clearInfeedAPIFlag = true;
+      getDestinationAPIFlag = false;
+    }
+
+    if (clearInfeedAPIFlag) {
+      ClearInfeedStation();
+      clearInfeedAPIFlag = false;
+    }
+
+    if (updateParcelDroppedInTheDumpAPIFlag) {
+      UpdateParcelDroppedInTheDump();
+      updateParcelDroppedInTheDumpAPIFlag = false;
+      dropoffStation = "X";
+    }
+
+    if (updateParcelDroppedAPIFlag) {
+      UpdateParcelDropped();
+      updateParcelDroppedAPIFlag = false;
+      dropoffStation = "X";
+    }
+  }
 }
