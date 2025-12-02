@@ -196,67 +196,81 @@ bool enableTorque(uint8_t id, bool enable) {
 }
 
 // Move Servo (Write Multiple Registers)
+// Matches SMS::WritePosEx exactly - writes 4 registers starting at 128
 bool setPosition(uint8_t id, int16_t position, uint16_t speed, uint8_t acc) {
   uint8_t txBuf[20];
   uint8_t rxBuf[8];
   
-  // We need to write 4 registers starting at REG_GOAL_POSITION
-  // Reg 1: Position
-  // Reg 2: 1 (Reserved/Time?)
-  // Reg 3: Acceleration
-  // Reg 4: Speed
+  // Modbus FC 16: Write Multiple Registers
+  // Writes 4 consecutive registers starting at SMS_GOAL_POSITION (128):
+  // Reg 128: Position
+  // Reg 129: Time/Mode (always 1 in library)
+  // Reg 130: Acceleration
+  // Reg 131: Speed
   
   txBuf[0] = id;
-  txBuf[1] = FC_WRITE_MULTIPLE;
-  txBuf[2] = 0x00;
-  txBuf[3] = REG_GOAL_POSITION;
-  txBuf[4] = 0x00;
-  txBuf[5] = 0x04; // Quantity: 4 registers
-  txBuf[6] = 0x08; // Byte count: 8 bytes
+  txBuf[1] = FC_WRITE_MULTIPLE;  // 16
+  txBuf[2] = (REG_GOAL_POSITION >> 8) & 0xFF;  // Address high byte
+  txBuf[3] = REG_GOAL_POSITION & 0xFF;          // Address low byte (128 = 0x80)
+  txBuf[4] = 0x00;  // Quantity high byte
+  txBuf[5] = 0x04;  // Quantity low byte: 4 registers
+  txBuf[6] = 0x08;  // Byte count: 8 bytes (4 registers * 2 bytes each)
   
-  // Data 1: Position (Little-Endian: Low byte first)
-  txBuf[7] = position & 0xFF;
-  txBuf[8] = (position >> 8) & 0xFF;
+  // CRITICAL: Library uses BIG-ENDIAN (highByte first, lowByte second)
+  // This matches Rtu.cpp line 106-112
   
-  // Data 2: Fixed value 1 (from SMS library) (Little-Endian)
-  txBuf[9] = 0x01;
-  txBuf[10] = 0x00;
+  // Data 1: Position (BIG-ENDIAN: High byte first)
+  txBuf[7] = (position >> 8) & 0xFF;   // High byte
+  txBuf[8] = position & 0xFF;           // Low byte
   
-  // Data 3: Acceleration (Little-Endian)
-  txBuf[11] = acc & 0xFF;
-  txBuf[12] = (acc >> 8) & 0xFF;
+  // Data 2: Time/Mode = 1 (BIG-ENDIAN)
+  txBuf[9] = 0x00;   // High byte
+  txBuf[10] = 0x01;  // Low byte
   
-  // Data 4: Speed (Little-Endian)
-  txBuf[13] = speed & 0xFF;
-  txBuf[14] = (speed >> 8) & 0xFF;
+  // Data 3: Acceleration (BIG-ENDIAN)
+  txBuf[11] = (acc >> 8) & 0xFF;  // High byte
+  txBuf[12] = acc & 0xFF;          // Low byte
+  
+  // Data 4: Speed (BIG-ENDIAN)
+  txBuf[13] = (speed >> 8) & 0xFF;  // High byte
+  txBuf[14] = speed & 0xFF;          // Low byte
+  
+  Serial.print("SetPosition: Pos=");
+  Serial.print(position);
+  Serial.print(" Spd=");
+  Serial.print(speed);
+  Serial.print(" Acc=");
+  Serial.println(acc);
   
   sendPacket(txBuf, 15); // 15 bytes data + 2 CRC = 17 total sent
   
   // Expect response: ID, FC, AddrHi, AddrLo, QtyHi, QtyLo, CRC_L, CRC_H
-  int result = readResponse(rxBuf, 8);
+  int result = readResponse(rxBuf, 8, 100);
   return (result == 8);
 }
 
 // Read Current Position
+// Modbus FC 03: Read Holding Registers
 int16_t readPosition(uint8_t id) {
   uint8_t txBuf[8];
-  uint8_t rxBuf[10]; // ID, FC, Bytes, ValHi, ValLo, CRC_L, CRC_H
+  uint8_t rxBuf[10];
   
   txBuf[0] = id;
-  txBuf[1] = FC_READ_REGISTERS;
-  txBuf[2] = 0x00;
-  txBuf[3] = REG_PRESENT_POS;
-  txBuf[4] = 0x00;
-  txBuf[5] = 0x01; // 1 Register
+  txBuf[1] = FC_READ_REGISTERS;  // 3
+  txBuf[2] = (REG_PRESENT_POS >> 8) & 0xFF;  // Address high byte
+  txBuf[3] = REG_PRESENT_POS & 0xFF;          // Address low byte (257 = 0x0101)
+  txBuf[4] = 0x00;  // Quantity high byte
+  txBuf[5] = 0x01;  // Quantity low byte: 1 register
   
   sendPacket(txBuf, 6);
   
-  // Response: ID(1), FC(1), Bytes(1), Data(2), CRC(2) = 7 bytes
-  int result = readResponse(rxBuf, 7);
+  // Response: ID(1), FC(1), ByteCount(1), DataHi(1), DataLo(1), CRC(2) = 7 bytes
+  int result = readResponse(rxBuf, 7, 100);
   
   if (result == 7) {
-    // SMS uses little-endian: low byte first
-    int16_t pos = rxBuf[4] | (rxBuf[3] << 8);
+    // Library uses word(high, low) = BIG-ENDIAN (see Rtu.cpp line 321)
+    // Response format: [ID][FC][ByteCount=2][DataHigh][DataLow][CRC_L][CRC_H]
+    int16_t pos = (rxBuf[3] << 8) | rxBuf[4];  // High byte first
     return pos;
   }
   
