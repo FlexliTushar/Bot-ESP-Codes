@@ -102,14 +102,15 @@ const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
 const String ENTITY_TYPE = "bot";
+bool global_error_status = false;
 
 //=============================================================================
 // COLUMN DETECTION THRESHOLDS
 //=============================================================================
-const int EXIT_CONFIRMATION_THRESHOLD = 10;      // Consecutive 00s to confirm column exit
+const int EXIT_CONFIRMATION_THRESHOLD = 5;      // Consecutive 00s to confirm column exit
 const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames for valid column
 const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Expected column width in frames
-const int DEFAULT_EMPTY_SPACE_THRESHOLD = 30;    // Expected empty space frames
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected empty space frames
 
 // Health monitoring thresholds (percentages)
 const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
@@ -985,7 +986,7 @@ DriveMotorState drive_motor_current_state = DRIVE_MOTOR_STOP;
 DriveMotorState drive_motor_previous_state = DRIVE_MOTOR_STOP;
 DriveMotorDirection drive_motor_current_direction = DRIVE_MOTOR_FORWARD;
 DriveMotorDirection drive_motor_previous_direction = DRIVE_MOTOR_FORWARD;
-int drive_motor_sweep_speed = 0;
+int drive_motor_sweep_speed = S0_05;
 int drive_motor_set_speed = 0;
 int drive_motor_direction_value = 1;
 bool drive_motor_error_status = false;
@@ -1176,13 +1177,13 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         }
 
         // Transition to RUNNING
-        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+        if (current_assignment == true && traffic_permission == true && global_error_status == false) {
             drive_motor_current_state = DRIVE_MOTOR_RUNNING;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
         
         // Transition to SWEEPING_COLUMN
-        if (current_assignment == true && drive_motor_current_speed == 0 && traffic_permission == false && global_error_permission == true) {
+        if (current_assignment == true && drive_motor_current_speed == 0 && traffic_permission == false && global_error_status == false) {
             drive_motor_current_state = DRIVE_MOTOR_SWEEPING_COLUMN;
             column_detected_in_sweep = false;
             return DRIVE_MOTOR_STATE_CHANGED;
@@ -1209,7 +1210,7 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         }
         
         // Transition to RUNNING (if assignment and permission restored)
-        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+        if (current_assignment == true && traffic_permission == true && global_error_status == false) {
             drive_motor_current_state = DRIVE_MOTOR_RUNNING;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
@@ -1229,7 +1230,7 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         }
 
         // Transition to STOPPING (traffic permission removed)
-        if (global_error_permission == false || (current_assignment == true && traffic_permission == false)) {
+        if (global_error_status == true || (current_assignment == true && traffic_permission == false)) {
             drive_motor_current_state = DRIVE_MOTOR_STOPPING;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
@@ -1249,13 +1250,13 @@ DriveMotorStateOutput UpdateDriveMotorState() {
         }
 
         // Transition to STOPPING (column crossed)
-        if (global_error_permission == false || (current_assignment == true && traffic_permission == false && column_detected_in_sweep == true)) {
+        if (global_error_status == true || (current_assignment == true && traffic_permission == false && column_detected_in_sweep == true)) {
             drive_motor_current_state = DRIVE_MOTOR_STOPPING;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
         
         // Transition to RUNNING (if traffic permission granted)
-        if (current_assignment == true && traffic_permission == true && global_error_permission == true) {
+        if (current_assignment == true && traffic_permission == true && global_error_status == false) {
             drive_motor_current_state = DRIVE_MOTOR_RUNNING;
             return DRIVE_MOTOR_STATE_CHANGED;
         }
@@ -1374,7 +1375,6 @@ int left_position_tolerance = 100;   // +/- tolerance for left position
 int right_position_tolerance = 100;  // +/- tolerance for right position
 
 // Shared variables
-bool global_error_status = false;
 DiverterDirection diverter_track_edge_direction = DIVERTER_DIRECTION_RIGHT;
 volatile DiverterPosition current_diverter_position_high_level = DIVERTER_POSITION_UNKNOWN;
 
@@ -1581,13 +1581,13 @@ void UpdateDiverterActuatorInputVariables() {
   if (diverter_current_state == DIVERTER_LEFT) {
     // ===== LEFT STATE =====
     diverter_set_torque_flag = false;
-    // add_log("Diverter in " + DiverterStateToString(DIVERTER_LEFT) + " position - torque disabled.");
+    add_log("Diverter in " + DiverterStateToString(DIVERTER_LEFT) + " position - torque disabled.");
   }
   
   else if (diverter_current_state == DIVERTER_RIGHT) {
     // ===== RIGHT STATE =====
     diverter_set_torque_flag = false;
-    // add_log("Diverter in " + DiverterStateToString(DIVERTER_RIGHT) + " position - torque disabled.");
+    add_log("Diverter in " + DiverterStateToString(DIVERTER_RIGHT) + " position - torque disabled.");
   }
   
   else if (diverter_current_state == DIVERTER_SWITCHING) {
@@ -1595,17 +1595,17 @@ void UpdateDiverterActuatorInputVariables() {
     diverter_set_torque_flag = true;  // Enable torque for movement
     if (diverter_track_edge_direction == DIVERTER_DIRECTION_LEFT) {
       portENTER_CRITICAL(&diverter_set_position_value_mux);
-      front_diverter_set_position_value = front_diverter_left_thresold;
-      rear_diverter_set_position_value = rear_diverter_left_thresold;
+      front_diverter_set_position_value = front_diverter_left_limit;
+      rear_diverter_set_position_value = rear_diverter_left_limit;
       portEXIT_CRITICAL(&diverter_set_position_value_mux);
-      // add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT) + " - moving to front threshold: " + String(front_diverter_left_thresold) + " and rear threshold: " + String(rear_diverter_left_thresold));
+      add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_LEFT) + " - moving to front limit: " + String(front_diverter_left_limit) + " and rear limit: " + String(rear_diverter_left_limit));
     }
     else if (diverter_track_edge_direction == DIVERTER_DIRECTION_RIGHT) {
       portENTER_CRITICAL(&diverter_set_position_value_mux);
-      front_diverter_set_position_value = front_diverter_right_thresold;
-      rear_diverter_set_position_value = rear_diverter_right_thresold;
+      front_diverter_set_position_value = front_diverter_right_limit;
+      rear_diverter_set_position_value = rear_diverter_right_limit;
       portEXIT_CRITICAL(&diverter_set_position_value_mux);
-      // add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_RIGHT) + " - moving to front threshold: " + String(front_diverter_right_thresold) + " and rear threshold: " + String(rear_diverter_right_thresold));
+      add_log("Switching to " + DiverterDirectionToString(DIVERTER_DIRECTION_RIGHT) + " - moving to front limit: " + String(front_diverter_right_limit) + " and rear limit: " + String(rear_diverter_right_limit));
     }
   }
   
@@ -1660,6 +1660,9 @@ void UpdateDiverterPositionHighLevel() {
 void setup() {
   Serial.begin(115200);
   delay(2000);
+
+  // Connect to WiFi
+  WiFiConfig();
   
   Serial.println("\n╔════════════════════════════════════════╗");
   Serial.println("║  Library-less State Machine - d539     ║");
@@ -1685,6 +1688,8 @@ void setup() {
     delay(1000);
   }
   Serial.println("Ready!\n");
+
+  ServoConfig();
   
   // Initialize CAN
   Serial.println("→ Initializing CAN (500 kbit/s)...");
@@ -1707,11 +1712,6 @@ void setup() {
 
   // Load configuration from NVM
   LoadDiverterConfig();
-
-  ServoConfig();
-  
-  // Connect to WiFi
-  WiFiConfig();
   
   // Initialize debug string
   debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
@@ -1776,6 +1776,7 @@ void loop() {
 void SENSOR_READING_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(1));  // FIXED: 1ms delay (was 0 due to integer division)
+    global_error_status = error_diverter_status || drive_motor_error_status;
     
     // Read TI/CI sensors and process column detection
     String combo = ReadSensorCombo();
@@ -1814,7 +1815,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.EnableTorque(FRONT_SERVO, DISABLE);
         if (sm.getLastError()) {
-          // add_log("Front torque disabling communication failed!");
+          add_log("Front torque disabling communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1822,7 +1823,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.EnableTorque(REAR_SERVO, DISABLE);
         if (sm.getLastError()) {
-          // add_log("Rear torque disabling communication failed!");
+          add_log("Rear torque disabling communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1833,7 +1834,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
         if (sm.getLastError()) {
-          // add_log("Front position write communication failed!");
+          add_log("Front position write communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1844,7 +1845,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
         if (sm.getLastError()) {
-          // add_log("Rear position write communication failed!");
+          add_log("Rear position write communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1855,7 +1856,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.WritePosEx(FRONT_SERVO, front_diverter_set_position_value, 100);
         if (sm.getLastError()) {
-          // add_log("Front position write communication failed!");
+          add_log("Front position write communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1866,7 +1867,7 @@ void ACTUATION_TASK(void* pvParameters) {
         delay(1);
         sm.WritePosEx(REAR_SERVO, rear_diverter_set_position_value, 100);
         if (sm.getLastError()) {
-          // add_log("Rear position write communication failed!");
+          add_log("Rear position write communication failed!");
           portENTER_CRITICAL(&error_diverter_status_mux);
           error_diverter_status = true;
           portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1877,7 +1878,7 @@ void ACTUATION_TASK(void* pvParameters) {
     delay(1);
     front_diverter_current_position = sm.ReadPos(FRONT_SERVO);
     if (sm.getLastError()) {
-      // add_log("Front position read communication failed!");
+      add_log("Front position read communication failed!");
       portENTER_CRITICAL(&error_diverter_status_mux);
       error_diverter_status = true;
       portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1885,7 +1886,7 @@ void ACTUATION_TASK(void* pvParameters) {
     delay(1);
     rear_diverter_current_position = sm.ReadPos(REAR_SERVO);
     if (sm.getLastError()) {
-      // add_log("Rear position read communication failed!");
+      add_log("Rear position read communication failed!");
       portENTER_CRITICAL(&error_diverter_status_mux);
       error_diverter_status = true;
       portEXIT_CRITICAL(&error_diverter_status_mux);
@@ -1893,17 +1894,17 @@ void ACTUATION_TASK(void* pvParameters) {
 
     UpdateDiverterPositionHighLevel();
 
-    int32_t getSetVelocity;
-    if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
-      if (getSetVelocity != drive_motor_set_speed) {
-        drive_motor_previous_set_speed = getSetVelocity;
-      }
-    }
-    
     // Update motor speed if changed
     if (drive_motor_set_speed != drive_motor_previous_set_speed) {
-      setTargetVelocity(drive_motor_set_speed);
-      drive_motor_previous_set_speed = drive_motor_set_speed;
+      CANStatus success = setTargetVelocity(drive_motor_set_speed);
+      if (success == CAN_OK) {
+        int32_t getSetVelocity;
+        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
+          if (getSetVelocity == drive_motor_set_speed) {
+            drive_motor_previous_set_speed = drive_motor_set_speed;
+          }
+        }
+      }
     }
 
     // Monitor drive motor current speed

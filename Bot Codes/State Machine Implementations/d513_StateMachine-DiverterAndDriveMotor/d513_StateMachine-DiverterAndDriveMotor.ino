@@ -78,7 +78,7 @@ enum DriveMotorStateOutput {
 const String CODE_ID = "d513";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
-const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
+const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
 
 Adafruit_MCP23X17 mcp;
 SMS sm;
@@ -1195,7 +1195,8 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
     if (debugLoggingString != BOT_ID + " " + CODE_ID + ": ") {
       int httpCode = -1;
       if (loggerFlag) {
-        httpDebugger.begin(HTTP_DEBUG_SERVER_URL);
+        String loggerUrl = HTTP_DEBUG_SERVER_URL + "?entity=bot&entity_id=" + BOT_ID;
+        httpDebugger.begin(loggerUrl);
         httpCode = httpDebugger.POST(debugLoggingString);
       } else {
         httpCode = HTTP_CODE_OK;

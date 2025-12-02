@@ -100,10 +100,10 @@ const String ENTITY_TYPE = "bot";
 //=============================================================================
 // COLUMN DETECTION THRESHOLDS
 //=============================================================================
-const int EXIT_CONFIRMATION_THRESHOLD = 10;      // Consecutive 00s to confirm column exit
+const int EXIT_CONFIRMATION_THRESHOLD = 5;      // Consecutive 00s to confirm column exit
 const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames for valid column
 const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Expected column width in frames
-const int DEFAULT_EMPTY_SPACE_THRESHOLD = 30;    // Expected empty space frames
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected empty space frames
 
 // Health monitoring thresholds (percentages)
 const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
@@ -192,161 +192,161 @@ void diagnoseSDOAbort(uint32_t abort_code, uint16_t index) {
   switch (abort_code) {
     // Standard CANopen abort codes
     case 0x05030000:
-      Serial.println("│ Error: Toggle bit not alternated");
-      Serial.println("│ Cause: SDO protocol error");
-      Serial.println("│ Action: Retry command, check CAN bus integrity");
+      add_log("│ Error: Toggle bit not alternated");
+      add_log("│ Cause: SDO protocol error");
+      add_log("│ Action: Retry command, check CAN bus integrity");
       break;
       
     case 0x05040000:
-      Serial.println("│ Error: SDO protocol timed out");
-      Serial.println("│ Cause: EPOS didn't respond in time");
-      Serial.println("│ Action: Check EPOS power, CAN connection, node ID");
+      add_log("│ Error: SDO protocol timed out");
+      add_log("│ Cause: EPOS didn't respond in time");
+      add_log("│ Action: Check EPOS power, CAN connection, node ID");
       break;
       
     case 0x05040001:
-      Serial.println("│ Error: Client/server command specifier not valid");
-      Serial.println("│ Cause: Invalid SDO command byte");
-      Serial.println("│ Action: Check SDO frame format (0x22 for write, 0x40 for read)");
+      add_log("│ Error: Client/server command specifier not valid");
+      add_log("│ Cause: Invalid SDO command byte");
+      add_log("│ Action: Check SDO frame format (0x22 for write, 0x40 for read)");
       break;
       
     case 0x06010000:
-      Serial.println("│ Error: Unsupported access to an object");
-      Serial.println("│ Cause: Object cannot be accessed (read-only, write-only, etc.)");
-      Serial.println("│ Action: Check EPOS documentation for object access rights");
+      add_log("│ Error: Unsupported access to an object");
+      add_log("│ Cause: Object cannot be accessed (read-only, write-only, etc.)");
+      add_log("│ Action: Check EPOS documentation for object access rights");
       break;
       
     case 0x06010001:
-      Serial.println("│ Error: Attempt to read a write-only object");
-      Serial.println("│ Cause: Trying to read from write-only parameter");
-      Serial.println("│ Action: Use correct access direction for this object");
+      add_log("│ Error: Attempt to read a write-only object");
+      add_log("│ Cause: Trying to read from write-only parameter");
+      add_log("│ Action: Use correct access direction for this object");
       break;
       
     case 0x06010002:
-      Serial.println("│ Error: Attempt to write a read-only object");
-      Serial.println("│ Cause: Trying to write to read-only parameter");
-      Serial.println("│ Action: Use correct access direction for this object");
+      add_log("│ Error: Attempt to write a read-only object");
+      add_log("│ Cause: Trying to write to read-only parameter");
+      add_log("│ Action: Use correct access direction for this object");
       break;
       
     case 0x06020000:
-      Serial.println("│ Error: Object does not exist in object dictionary");
-      Serial.println("│ Cause: Invalid object index or not supported by this EPOS");
-      Serial.println("│ Action: Check object index, verify EPOS firmware version");
+      add_log("│ Error: Object does not exist in object dictionary");
+      add_log("│ Cause: Invalid object index or not supported by this EPOS");
+      add_log("│ Action: Check object index, verify EPOS firmware version");
       break;
       
     case 0x06040041:
-      Serial.println("│ Error: Object cannot be mapped to PDO");
-      Serial.println("│ Cause: This object doesn't support PDO mapping");
-      Serial.println("│ Action: Use SDO access instead of PDO");
+      add_log("│ Error: Object cannot be mapped to PDO");
+      add_log("│ Cause: This object doesn't support PDO mapping");
+      add_log("│ Action: Use SDO access instead of PDO");
       break;
       
     case 0x06040042:
-      Serial.println("│ Error: PDO length exceeded");
-      Serial.println("│ Cause: Too many objects mapped to PDO");
-      Serial.println("│ Action: Reduce PDO mapping or split into multiple PDOs");
+      add_log("│ Error: PDO length exceeded");
+      add_log("│ Cause: Too many objects mapped to PDO");
+      add_log("│ Action: Reduce PDO mapping or split into multiple PDOs");
       break;
       
     case 0x06040043:
-      Serial.println("│ Error: General parameter incompatibility");
-      Serial.println("│ Cause: Parameter conflict or invalid configuration");
-      Serial.println("│ Action: Check parameter dependencies and valid ranges");
+      add_log("│ Error: General parameter incompatibility");
+      add_log("│ Cause: Parameter conflict or invalid configuration");
+      add_log("│ Action: Check parameter dependencies and valid ranges");
       break;
       
     case 0x06040047:
-      Serial.println("│ Error: General internal incompatibility");
-      Serial.println("│ Cause: Internal EPOS state prevents this operation");
-      Serial.println("│ Action: Check EPOS state machine, may need reset");
+      add_log("│ Error: General internal incompatibility");
+      add_log("│ Cause: Internal EPOS state prevents this operation");
+      add_log("│ Action: Check EPOS state machine, may need reset");
       break;
       
     case 0x06060000:
-      Serial.println("│ Error: Access failed due to hardware error");
-      Serial.println("│ Cause: Hardware fault detected");
-      Serial.println("│ Action: Check motor connections, power supply, encoder");
+      add_log("│ Error: Access failed due to hardware error");
+      add_log("│ Cause: Hardware fault detected");
+      add_log("│ Action: Check motor connections, power supply, encoder");
       break;
       
     case 0x06070010:
-      Serial.println("│ Error: Data type does not match");
-      Serial.println("│ Cause: Wrong data size for this object");
-      Serial.println("│ Action: Check object data type (16-bit vs 32-bit)");
+      add_log("│ Error: Data type does not match");
+      add_log("│ Cause: Wrong data size for this object");
+      add_log("│ Action: Check object data type (16-bit vs 32-bit)");
       break;
       
     case 0x06070012:
-      Serial.println("│ Error: Data type length too high");
-      Serial.println("│ Cause: Sending too many data bytes");
-      Serial.println("│ Action: Use correct SDO command specifier (0x22 vs 0x23)");
+      add_log("│ Error: Data type length too high");
+      add_log("│ Cause: Sending too many data bytes");
+      add_log("│ Action: Use correct SDO command specifier (0x22 vs 0x23)");
       break;
       
     case 0x06070013:
-      Serial.println("│ Error: Data type length too low");
-      Serial.println("│ Cause: Not enough data bytes sent");
-      Serial.println("│ Action: Use correct SDO command specifier");
+      add_log("│ Error: Data type length too low");
+      add_log("│ Cause: Not enough data bytes sent");
+      add_log("│ Action: Use correct SDO command specifier");
       break;
       
     case 0x06090011:
-      Serial.println("│ Error: Sub-index does not exist");
-      Serial.println("│ Cause: Invalid subindex for this object");
-      Serial.println("│ Action: Check object dictionary for valid subindices");
+      add_log("│ Error: Sub-index does not exist");
+      add_log("│ Cause: Invalid subindex for this object");
+      add_log("│ Action: Check object dictionary for valid subindices");
       break;
       
     case 0x06090030:
-      Serial.println("│ Error: Value range exceeded");
-      Serial.println("│ Cause: Parameter value out of valid range");
-      Serial.println("│ Action: Check min/max limits in EPOS documentation");
+      add_log("│ Error: Value range exceeded");
+      add_log("│ Cause: Parameter value out of valid range");
+      add_log("│ Action: Check min/max limits in EPOS documentation");
       if (index == TARGET_VELOCITY) {
-        Serial.println("│ Note: Target velocity may exceed configured limits");
-        Serial.println("│       Check Max Profile Velocity (0x607F)");
+        add_log("│ Note: Target velocity may exceed configured limits");
+        add_log("│       Check Max Profile Velocity (0x607F)");
       }
       break;
       
     case 0x06090031:
-      Serial.println("│ Error: Value too high");
-      Serial.println("│ Cause: Parameter exceeds maximum limit");
-      Serial.println("│ Action: Reduce value or increase configured maximum");
+      add_log("│ Error: Value too high");
+      add_log("│ Cause: Parameter exceeds maximum limit");
+      add_log("│ Action: Reduce value or increase configured maximum");
       break;
       
     case 0x06090032:
-      Serial.println("│ Error: Value too low");
-      Serial.println("│ Cause: Parameter below minimum limit");
-      Serial.println("│ Action: Increase value or decrease configured minimum");
+      add_log("│ Error: Value too low");
+      add_log("│ Cause: Parameter below minimum limit");
+      add_log("│ Action: Increase value or decrease configured minimum");
       break;
       
     case 0x08000000:
-      Serial.println("│ Error: General error");
-      Serial.println("│ Cause: Unspecified error condition");
-      Serial.println("│ Action: Check EPOS error register, may need reset");
+      add_log("│ Error: General error");
+      add_log("│ Cause: Unspecified error condition");
+      add_log("│ Action: Check EPOS error register, may need reset");
       break;
       
     case 0x08000020:
-      Serial.println("│ Error: Data cannot be transferred or stored");
-      Serial.println("│ Cause: EPOS cannot process this command now");
-      Serial.println("│ Action: Check EPOS state, wait for current operation to finish");
+      add_log("│ Error: Data cannot be transferred or stored");
+      add_log("│ Cause: EPOS cannot process this command now");
+      add_log("│ Action: Check EPOS state, wait for current operation to finish");
       break;
       
     case 0x08000021:
-      Serial.println("│ Error: Data cannot be transferred (local control)");
-      Serial.println("│ Cause: EPOS in local control mode");
-      Serial.println("│ Action: Disable local control, switch to remote mode");
+      add_log("│ Error: Data cannot be transferred (local control)");
+      add_log("│ Cause: EPOS in local control mode");
+      add_log("│ Action: Disable local control, switch to remote mode");
       break;
       
     case 0x08000022:
-      Serial.println("│ Error: Data cannot be transferred (device state)");
-      Serial.println("│ Cause: EPOS not in correct state for this operation");
-      Serial.println("│ Action: Check state machine, may need to enable device first");
+      add_log("│ Error: Data cannot be transferred (device state)");
+      add_log("│ Cause: EPOS not in correct state for this operation");
+      add_log("│ Action: Check state machine, may need to enable device first");
       if (index == TARGET_VELOCITY || index == CONTROLWORD) {
-        Serial.println("│ Note: Motor may not be enabled - try shutdown() then enable()");
+        add_log("│ Note: Motor may not be enabled - try shutdown() then enable()");
       }
       break;
       
     // EPOS-specific abort codes
     case 0x0F00FFC0:
-      Serial.println("│ Error: EPOS password protected");
-      Serial.println("│ Cause: Object requires password to access");
-      Serial.println("│ Action: Unlock EPOS using password command");
+      add_log("│ Error: EPOS password protected");
+      add_log("│ Cause: Object requires password to access");
+      add_log("│ Action: Unlock EPOS using password command");
       break;
       
     default:
-      Serial.println("│ Error: Unknown abort code");
-      Serial.println("│ Cause: Undocumented or vendor-specific error");
-      Serial.println("│ Action: Check EPOS manual, consider firmware update");
+      add_log("│ Error: Unknown abort code");
+      add_log("│ Cause: Undocumented or vendor-specific error");
+      add_log("│ Action: Check EPOS manual, consider firmware update");
       break;
   }
   
@@ -366,88 +366,88 @@ void diagnoseTWAIAlert(uint32_t alerts) {
   Serial.println("│");
   
   if (alerts & TWAI_ALERT_TX_IDLE) {
-    Serial.println("│ ℹ TX Idle: No transmission in progress");
+    add_log("│ ℹ TX Idle: No transmission in progress");
   }
   
   if (alerts & TWAI_ALERT_TX_SUCCESS) {
-    Serial.println("│ ✓ TX Success: Frame transmitted successfully");
+    add_log("│ ✓ TX Success: Frame transmitted successfully");
   }
   
   if (alerts & TWAI_ALERT_RX_DATA) {
-    Serial.println("│ ℹ RX Data: Frame received");
+    add_log("│ ℹ RX Data: Frame received");
   }
   
   if (alerts & TWAI_ALERT_BELOW_ERR_WARN) {
-    Serial.println("│ ✓ Below Error Warning: Bus healthy");
+    add_log("│ ✓ Below Error Warning: Bus healthy");
   }
   
   if (alerts & TWAI_ALERT_ERR_ACTIVE) {
-    Serial.println("│ ⚠ Error Active: Error counters elevated");
-    Serial.println("│ Cause: Occasional transmission errors");
-    Serial.println("│ Action: Check CAN bus termination, wiring, baud rate");
+    add_log("│ ⚠ Error Active: Error counters elevated");
+    add_log("│ Cause: Occasional transmission errors");
+    add_log("│ Action: Check CAN bus termination, wiring, baud rate");
   }
   
   if (alerts & TWAI_ALERT_RECOVERY_IN_PROGRESS) {
-    Serial.println("│ ⚠ Recovery in Progress: Attempting bus-off recovery");
-    Serial.println("│ Cause: Controller was in bus-off, now recovering");
-    Serial.println("│ Action: Wait for recovery, check bus health");
+    add_log("│ ⚠ Recovery in Progress: Attempting bus-off recovery");
+    add_log("│ Cause: Controller was in bus-off, now recovering");
+    add_log("│ Action: Wait for recovery, check bus health");
   }
   
   if (alerts & TWAI_ALERT_BUS_RECOVERED) {
-    Serial.println("│ ✓ Bus Recovered: Successfully recovered from bus-off");
+    add_log("│ ✓ Bus Recovered: Successfully recovered from bus-off");
   }
   
   if (alerts & TWAI_ALERT_ARB_LOST) {
-    Serial.println("│ ⚠ Arbitration Lost: Lost bus arbitration");
-    Serial.println("│ Cause: Another node transmitted at same time with higher priority");
-    Serial.println("│ Action: Normal in multi-node networks, will retry automatically");
+    add_log("│ ⚠ Arbitration Lost: Lost bus arbitration");
+    add_log("│ Cause: Another node transmitted at same time with higher priority");
+    add_log("│ Action: Normal in multi-node networks, will retry automatically");
   }
   
   if (alerts & TWAI_ALERT_ABOVE_ERR_WARN) {
-    Serial.println("│ ⚠ Above Error Warning: Error counters high (>96)");
-    Serial.println("│ Cause: Frequent bus errors, nearing bus-off");
-    Serial.println("│ Action: URGENT - Check termination, baud rate, wiring quality");
+    add_log("│ ⚠ Above Error Warning: Error counters high (>96)");
+    add_log("│ Cause: Frequent bus errors, nearing bus-off");
+    add_log("│ Action: URGENT - Check termination, baud rate, wiring quality");
   }
   
   if (alerts & TWAI_ALERT_BUS_ERROR) {
-    Serial.println("│ ✗ Bus Error: CAN protocol error detected");
-    Serial.println("│ Cause: Bit/stuff/CRC/form/ACK error");
-    Serial.println("│ Action: Check bus quality, termination, EMI");
+    add_log("│ ✗ Bus Error: CAN protocol error detected");
+    add_log("│ Cause: Bit/stuff/CRC/form/ACK error");
+    add_log("│ Action: Check bus quality, termination, EMI");
   }
   
   if (alerts & TWAI_ALERT_TX_FAILED) {
-    Serial.println("│ ✗ TX Failed: Transmission failed after retries");
-    Serial.println("│ Cause: No ACK from any node, or bus-off");
-    Serial.println("│ Action: Check if other nodes present, check EPOS power");
+    add_log("│ ✗ TX Failed: Transmission failed after retries");
+    add_log("│ Cause: No ACK from any node, or bus-off");
+    add_log("│ Action: Check if other nodes present, check EPOS power");
   }
   
   if (alerts & TWAI_ALERT_RX_QUEUE_FULL) {
-    Serial.println("│ ✗ RX Queue Full: Receive buffer overflow");
-    Serial.println("│ Cause: Not reading frames fast enough");
-    Serial.println("│ Action: Increase RX queue size or read more frequently");
+    add_log("│ ✗ RX Queue Full: Receive buffer overflow");
+    add_log("│ Cause: Not reading frames fast enough");
+    add_log("│ Action: Increase RX queue size or read more frequently");
   }
   
   if (alerts & TWAI_ALERT_ERR_PASS) {
-    Serial.println("│ ✗ Error Passive: Error counters critical (>127)");
-    Serial.println("│ Cause: Many bus errors, one step from bus-off");
-    Serial.println("│ Action: CRITICAL - Fix bus issues immediately");
-    Serial.println("│        Check: termination resistors (120Ω), baud rate match,");
-    Serial.println("│               cable quality, EMI shielding, ground loops");
+    add_log("│ ✗ Error Passive: Error counters critical (>127)");
+    add_log("│ Cause: Many bus errors, one step from bus-off");
+    add_log("│ Action: CRITICAL - Fix bus issues immediately");
+    add_log("│        Check: termination resistors (120Ω), baud rate match,");
+    add_log("│               cable quality, EMI shielding, ground loops");
   }
   
   if (alerts & TWAI_ALERT_BUS_OFF) {
-    Serial.println("│ ✗✗✗ BUS-OFF: Controller shut down due to errors");
-    Serial.println("│ Cause: Error count exceeded 255, bus completely unreliable");
-    Serial.println("│ Action: CRITICAL FAILURE");
-    Serial.println("│   1. Check CAN transceiver power and connections");
-    Serial.println("│   2. Verify 120Ω termination at both bus ends");
-    Serial.println("│   3. Confirm baud rate matches all nodes (500 kbit/s)");
-    Serial.println("│   4. Check CANH/CANL not swapped or shorted");
-    Serial.println("│   5. Measure bus voltage (recessive: 2.5V, dominant: 1.5V/3.5V)");
-    Serial.println("│   6. Will auto-recover, but root cause MUST be fixed");
+    add_log("│ ✗✗✗ BUS-OFF: Controller shut down due to errors");
+    add_log("│ Cause: Error count exceeded 255, bus completely unreliable");
+    add_log("│ Action: CRITICAL FAILURE");
+    add_log("│   1. Check CAN transceiver power and connections");
+    add_log("│   2. Verify 120Ω termination at both bus ends");
+    add_log("│   3. Confirm baud rate matches all nodes (500 kbit/s)");
+    add_log("│   4. Check CANH/CANL not swapped or shorted");
+    add_log("│   5. Measure bus voltage (recessive: 2.5V, dominant: 1.5V/3.5V)");
+    add_log("│   6. Will auto-recover, but root cause MUST be fixed");
   }
   
-  Serial.println("└────────────────────────────────────────\n");
+  add_log("└────────────────────────────────────────\n");
 }
 
 // Diagnose ESP_ERR codes
@@ -458,57 +458,57 @@ void diagnoseESPError(esp_err_t err, const char* operation) {
   
   Serial.print("\n┌─ ESP ERROR DIAGNOSTIC ─────────────────");
   Serial.print("\n│ Operation: ");
-  Serial.println(operation);
+  add_log(operation);
   Serial.print("│ Error Code: ");
   Serial.println(err);
   Serial.println("│");
   
   switch (err) {
     case ESP_OK:
-      Serial.println("│ Status: Success");
+      add_log("│ Status: Success");
       break;
       
     case ESP_ERR_TIMEOUT:
-      Serial.println("│ Error: Timeout");
-      Serial.println("│ Cause: Operation didn't complete in time");
+      add_log("│ Error: Timeout");
+      add_log("│ Cause: Operation didn't complete in time");
       if (strcmp(operation, "twai_transmit") == 0) {
-        Serial.println("│ Details: TX queue full or bus stuck");
-        Serial.println("│ Action: Check if EPOS responding, verify bus not saturated");
+        add_log("│ Details: TX queue full or bus stuck");
+        add_log("│ Action: Check if EPOS responding, verify bus not saturated");
       } else if (strcmp(operation, "twai_receive") == 0) {
-        Serial.println("│ Details: No frame received within timeout");
-        Serial.println("│ Action: Normal if no traffic, check if EPOS responding");
+        add_log("│ Details: No frame received within timeout");
+        add_log("│ Action: Normal if no traffic, check if EPOS responding");
       }
       break;
       
     case ESP_ERR_INVALID_STATE:
-      Serial.println("│ Error: Invalid State");
-      Serial.println("│ Cause: TWAI driver not started or in wrong mode");
-      Serial.println("│ Action: Check twai_start() was called, not in bus-off");
+      add_log("│ Error: Invalid State");
+      add_log("│ Cause: TWAI driver not started or in wrong mode");
+      add_log("│ Action: Check twai_start() was called, not in bus-off");
       break;
       
     case ESP_ERR_INVALID_ARG:
-      Serial.println("│ Error: Invalid Argument");
-      Serial.println("│ Cause: Bad parameter passed to TWAI function");
-      Serial.println("│ Action: Check message structure (ID, DLC, data)");
+      add_log("│ Error: Invalid Argument");
+      add_log("│ Cause: Bad parameter passed to TWAI function");
+      add_log("│ Action: Check message structure (ID, DLC, data)");
       break;
       
     case ESP_FAIL:
-      Serial.println("│ Error: General Failure");
-      Serial.println("│ Cause: Unspecified error in TWAI driver");
-      Serial.println("│ Action: Check TWAI initialization, may need restart");
+      add_log("│ Error: General Failure");
+      add_log("│ Cause: Unspecified error in TWAI driver");
+      add_log("│ Action: Check TWAI initialization, may need restart");
       break;
       
     case ESP_ERR_NOT_SUPPORTED:
-      Serial.println("│ Error: Not Supported");
-      Serial.println("│ Cause: Feature not available on this ESP32 variant");
-      Serial.println("│ Action: Check ESP32 model supports TWAI/CAN");
+      add_log("│ Error: Not Supported");
+      add_log("│ Cause: Feature not available on this ESP32 variant");
+      add_log("│ Action: Check ESP32 model supports TWAI/CAN");
       break;
       
     default:
       Serial.print("│ Error: Unknown (");
       Serial.print(err);
-      Serial.println(")");
-      Serial.println("│ Action: Check ESP-IDF documentation");
+      add_log(")");
+      add_log("│ Action: Check ESP-IDF documentation");
       break;
   }
   
@@ -955,7 +955,7 @@ DriveMotorState drive_motor_current_state = DRIVE_MOTOR_STOP;
 DriveMotorState drive_motor_previous_state = DRIVE_MOTOR_STOP;
 DriveMotorDirection drive_motor_current_direction = DRIVE_MOTOR_FORWARD;
 DriveMotorDirection drive_motor_previous_direction = DRIVE_MOTOR_FORWARD;
-int drive_motor_sweep_speed = 0;
+int drive_motor_sweep_speed = S0_05;
 int drive_motor_set_speed = 0;
 int drive_motor_direction_value = 1;
 bool drive_motor_error_status = false;
@@ -1452,18 +1452,18 @@ void SENSOR_READING_TASK(void* pvParameters) {
 void ACTUATION_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(10));  // 10ms delay
-
-    int32_t getSetVelocity;
-    if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
-      if (getSetVelocity != drive_motor_set_speed) {
-        drive_motor_previous_set_speed = getSetVelocity;
-      }
-    }
     
     // Update motor speed if changed
     if (drive_motor_set_speed != drive_motor_previous_set_speed) {
-      setTargetVelocity(drive_motor_set_speed);
-      drive_motor_previous_set_speed = drive_motor_set_speed;
+      CANStatus success = setTargetVelocity(drive_motor_set_speed);
+      if (success == CAN_OK) {
+        int32_t getSetVelocity;
+        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
+          if (getSetVelocity == drive_motor_set_speed) {
+            drive_motor_previous_set_speed = drive_motor_set_speed;
+          }
+        }
+      }
     }
 
     // Monitor drive motor current speed
