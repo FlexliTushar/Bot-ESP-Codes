@@ -87,6 +87,15 @@ void sendPacket(uint8_t *buffer, uint8_t length) {
   buffer[length] = crc & 0xFF;      // CRC Low
   buffer[length + 1] = crc >> 8;    // CRC High
   
+  // Debug: print TX frame
+  Serial.print("TX: ");
+  for (int i = 0; i < length + 2; i++) {
+    if (buffer[i] < 0x10) Serial.print("0");
+    Serial.print(buffer[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+  
   // Clear RX buffer before sending
   while (Serial2.available()) Serial2.read();
   
@@ -95,7 +104,7 @@ void sendPacket(uint8_t *buffer, uint8_t length) {
   Serial2.flush();
   
   // Small delay for bus turnaround
-  delay(2); 
+  delay(3); 
 }
 
 // Read response from servo
@@ -117,9 +126,27 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 50) {
     Serial.print("Error: Timeout/Incomplete. Read ");
     Serial.print(bytesRead);
     Serial.print("/");
-    Serial.println(expectedLen);
+    Serial.print(expectedLen);
+    if (bytesRead > 0) {
+      Serial.print(" RX: ");
+      for (int i = 0; i < bytesRead; i++) {
+        if (buffer[i] < 0x10) Serial.print("0");
+        Serial.print(buffer[i], HEX);
+        Serial.print(" ");
+      }
+    }
+    Serial.println();
     return -1;
   }
+  
+  // Debug: print RX frame
+  Serial.print("RX: ");
+  for (int i = 0; i < bytesRead; i++) {
+    if (buffer[i] < 0x10) Serial.print("0");
+    Serial.print(buffer[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
   
   // Verify CRC
   uint16_t receivedCRC = (buffer[bytesRead - 1] << 8) | buffer[bytesRead - 2];
@@ -179,21 +206,21 @@ bool setPosition(uint8_t id, int16_t position, uint16_t speed, uint8_t acc) {
   txBuf[5] = 0x04; // Quantity: 4 registers
   txBuf[6] = 0x08; // Byte count: 8 bytes
   
-  // Data 1: Position
-  txBuf[7] = (position >> 8) & 0xFF;
-  txBuf[8] = position & 0xFF;
+  // Data 1: Position (Little-Endian: Low byte first)
+  txBuf[7] = position & 0xFF;
+  txBuf[8] = (position >> 8) & 0xFF;
   
-  // Data 2: Fixed value 1 (from SMS library)
-  txBuf[9] = 0x00;
-  txBuf[10] = 0x01;
+  // Data 2: Fixed value 1 (from SMS library) (Little-Endian)
+  txBuf[9] = 0x01;
+  txBuf[10] = 0x00;
   
-  // Data 3: Acceleration
-  txBuf[11] = (acc >> 8) & 0xFF;
-  txBuf[12] = acc & 0xFF;
+  // Data 3: Acceleration (Little-Endian)
+  txBuf[11] = acc & 0xFF;
+  txBuf[12] = (acc >> 8) & 0xFF;
   
-  // Data 4: Speed
-  txBuf[13] = (speed >> 8) & 0xFF;
-  txBuf[14] = speed & 0xFF;
+  // Data 4: Speed (Little-Endian)
+  txBuf[13] = speed & 0xFF;
+  txBuf[14] = (speed >> 8) & 0xFF;
   
   sendPacket(txBuf, 15); // 15 bytes data + 2 CRC = 17 total sent
   
@@ -220,7 +247,8 @@ int16_t readPosition(uint8_t id) {
   int result = readResponse(rxBuf, 7);
   
   if (result == 7) {
-    int16_t pos = (rxBuf[3] << 8) | rxBuf[4];
+    // SMS uses little-endian: low byte first
+    int16_t pos = rxBuf[4] | (rxBuf[3] << 8);
     return pos;
   }
   
