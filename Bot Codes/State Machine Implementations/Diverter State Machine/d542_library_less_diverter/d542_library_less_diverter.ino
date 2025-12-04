@@ -585,7 +585,7 @@ void DIVERTER_ACTUATION_TASK(void* pvParameters) {
       if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
         if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
           delay(1);
-          if (!setPositionFront(front_target_position, 100, 50)) {
+          if (!setPositionFront(front_target_position, 100, 0)) {
             Serial.println("✗ Front position write failed");
             error_front_servo = true;
           }
@@ -593,7 +593,7 @@ void DIVERTER_ACTUATION_TASK(void* pvParameters) {
       } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
         if (front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
           delay(1);
-          if (!setPositionFront(front_target_position, 100, 50)) {
+          if (!setPositionFront(front_target_position, 100, 0)) {
             Serial.println("✗ Front position write failed");
             error_front_servo = true;
           }
@@ -604,7 +604,7 @@ void DIVERTER_ACTUATION_TASK(void* pvParameters) {
       if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
         if (rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
           delay(1);
-          if (!setPositionRear(rear_target_position, 100, 50)) {
+          if (!setPositionRear(rear_target_position, 100, 0)) {
             Serial.println("✗ Rear position write failed");
             error_rear_servo = true;
           }
@@ -612,7 +612,7 @@ void DIVERTER_ACTUATION_TASK(void* pvParameters) {
       } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
         if (rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
           delay(1);
-          if (!setPositionRear(rear_target_position, 100, 50)) {
+          if (!setPositionRear(rear_target_position, 100, 0)) {
             Serial.println("✗ Rear position write failed");
             error_rear_servo = true;
           }

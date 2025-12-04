@@ -1093,7 +1093,7 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 100) {
   }
   
   if (bytesRead < expectedLen) {
-    add_log("✗ Timeout: " + String(bytesRead) + "/" + String(expectedLen));
+    Serial.println("✗ Timeout: " + String(bytesRead) + "/" + String(expectedLen));
     // Serial.print(bytesRead);
     // Serial.print("/");
     // Serial.println(expectedLen);
@@ -1104,7 +1104,7 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 100) {
   uint16_t calculatedCRC = calcCRC(buffer, bytesRead - 2);
   
   if (receivedCRC != calculatedCRC) {
-    add_log("✗ CRC Error");
+    Serial.println("✗ CRC Error");
     return -2;
   }
   
@@ -1829,24 +1829,24 @@ void ACTUATION_TASK(void* pvParameters) {
         // Disable torque
         delay(1);
         if (!enableTorqueFront(DISABLE)) {
-          add_log("✗ Front torque disable failed");
+          Serial.println("✗ Front torque disable failed");
           error_front_servo = true;
         }
         delay(1);
         if (!enableTorqueRear(DISABLE)) {
-          add_log("✗ Rear torque disable failed");
+          Serial.println("✗ Rear torque disable failed");
           error_rear_servo = true;
         }
       } else {
         // Enable torque
         delay(1);
         if (!enableTorqueFront(ENABLE)) {
-          add_log("✗ Front torque enable failed");
+          Serial.println("✗ Front torque enable failed");
           error_front_servo = true;
         }
         delay(1);
         if (!enableTorqueRear(ENABLE)) {
-          add_log("✗ Rear torque enable failed");
+          Serial.println("✗ Rear torque enable failed");
           error_rear_servo = true;
         }
       }
@@ -1860,7 +1860,7 @@ void ACTUATION_TASK(void* pvParameters) {
         if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
           delay(1);
           if (!setPositionFront(front_target_position, 100, 0)) {
-            add_log("✗ Front position write failed");
+            Serial.println("✗ Front position write failed");
             error_front_servo = true;
           }
         }
@@ -1868,7 +1868,7 @@ void ACTUATION_TASK(void* pvParameters) {
         if (front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
           delay(1);
           if (!setPositionFront(front_target_position, 100, 0)) {
-            add_log("✗ Front position write failed");
+            Serial.println("✗ Front position write failed");
             error_front_servo = true;
           }
         }
@@ -1879,7 +1879,7 @@ void ACTUATION_TASK(void* pvParameters) {
         if (rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
           delay(1);
           if (!setPositionRear(rear_target_position, 100, 0)) {
-            add_log("✗ Rear position write failed");
+            Serial.println("✗ Rear position write failed");
             error_rear_servo = true;
           }
         }
@@ -1887,7 +1887,7 @@ void ACTUATION_TASK(void* pvParameters) {
         if (rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
           delay(1);
           if (!setPositionRear(rear_target_position, 100, 0)) {
-            add_log("✗ Rear position write failed");
+            Serial.println("✗ Rear position write failed");
             error_rear_servo = true;
           }
         }
@@ -1900,7 +1900,7 @@ void ACTUATION_TASK(void* pvParameters) {
       delay(1);
       int16_t front_pos = readPositionFront();
       if (front_pos == -1) {
-        add_log("✗ Front position read failed");
+        Serial.println("✗ Front position read failed");
         error_front_servo = true;
       } else {
         front_diverter_current_position = front_pos;
@@ -1910,7 +1910,7 @@ void ACTUATION_TASK(void* pvParameters) {
       delay(1);
       int16_t rear_pos = readPositionRear();
       if (rear_pos == -1) {
-        add_log("✗ Rear position read failed");
+        Serial.println("✗ Rear position read failed");
         error_rear_servo = true;
       } else {
         rear_diverter_current_position = rear_pos;
@@ -2150,7 +2150,12 @@ void PinConfig() {
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN);
+  delay(500);
+
+  Serial.println("\n╔════════════════════════════════════════╗");
+  Serial.println("║  Library-less Diverter State Machine   ║");
+  Serial.println("║            " FIRMWARE_VERSION "        ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
 
   // Initialize mutex for cross-core logging (Core 0 HTTP logger + Core 1 tasks)
   xDebugLogMutex = xSemaphoreCreateMutex();
@@ -2159,17 +2164,18 @@ void setup() {
     Serial.println("✗ FATAL: Failed to create debug log mutex");
     while(1) delay(1000);
   }
+
+  LoadDiverterConfig();
+
+  // Initialize debug string
+  debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
+
+  // Connect to WiFi
+  WiFiConfig();
   
   // Configure GPIO pins
   PinConfig();
   
-  delay(1000);
-  Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║  Library-less Diverter State Machine   ║");
-  Serial.println("║            " FIRMWARE_VERSION "                         ║");
-  Serial.println("╚════════════════════════════════════════╝\n");
-  
-  LoadDiverterConfig();
   Beep();
 
   // Motor power-up delay
@@ -2181,6 +2187,8 @@ void setup() {
     delay(1000);
   }
   Serial.println("Ready!\n");
+
+  Serial2.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN);
   
   // Initialize CAN
   Serial.println("→ Initializing CAN (500 kbit/s)...");
@@ -2201,12 +2209,6 @@ void setup() {
     while (1) delay(1000);
   }
   
-  // Connect to WiFi
-  WiFiConfig();
-  
-  // Initialize debug string
-  debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
-  
   // Set initial motor speed
   drive_motor_set_speed = S0_5;  // Initial speed set to 0.5 m/s
   
@@ -2221,17 +2223,19 @@ void setup() {
   xTaskCreatePinnedToCore(
     HTTP_DEBUG_LOGGER,
     "debug_logging",
-    8192,  // 8KB stack for HTTP operations
+    10000,  // 8KB stack for HTTP operations
     NULL,
     2,
     &httpDebugLog,
     0);
+
+  vTaskDelay(pdMS_TO_TICKS(20));
   
   // Create sensor reading task on Core 1
   xTaskCreatePinnedToCore(
     SENSOR_READING_TASK,
     "sensor_reading_task",
-    6144,  // 6KB stack for state machine and column detection
+    10000,  // 6KB stack for state machine and column detection
     NULL,
     5,
     &sensorReadingTask,
@@ -2243,7 +2247,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     ACTUATION_TASK,
     "actuation_task",
-    4096,  // 4KB stack for motor control and CAN
+    10000,  // 4KB stack for motor control and CAN
     NULL,
     4,
     &actuationTask,

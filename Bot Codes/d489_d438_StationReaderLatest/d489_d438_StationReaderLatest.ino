@@ -77,7 +77,8 @@ using namespace std;
 const String CODE_ID = "d489";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
-const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
+//const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
+const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
 const int THRESHOLD_INTENSITY = 250;
 const static int SR_D1 = 36;  // ESP32 pin attached to Photo diode 1
 const static int SR_D2 = 39;  // ESP32 pin attached to Photo diode 2
@@ -86,6 +87,7 @@ const static uint16_t PT_UPPER_THR_LIMIT = 600;  // Threshold limit for rising p
 const static uint16_t PT_LOWER_THR_LIMIT = 400;  // Threshold limit for falling photo diode reading
 
 const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
+const String ENTITY_TYPE = "bot";
 HTTPClient _http;
 
 // Monitoring variables
@@ -1129,8 +1131,10 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
       // Serial.println("Sending logs!");
       // Serial.println(String(WiFi.status()));
       int httpCode = -1;
+      String logUrl = HTTP_DEBUG_SERVER_URL + "?entity=" + ENTITY_TYPE + "&entity_id=" + BOT_ID;
       if (loggerFlag) {
-        httpDebugger.begin(HTTP_DEBUG_SERVER_URL);
+        httpDebugger.begin(logUrl);
+        //httpDebugger.begin(HTTP_DEBUG_SERVER_URL);
         httpCode = httpDebugger.POST(debugLoggingString);
         // Serial.println("Response: " + httpDebugger.getString());
       } else {
