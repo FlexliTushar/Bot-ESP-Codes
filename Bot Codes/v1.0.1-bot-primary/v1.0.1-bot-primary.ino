@@ -1,6 +1,7 @@
-#define FIRMWARE_ID                     "v1.0.0"
-// v1.0.0-bot-primary.ino
-// Primary bot firmware - Version 1.0.0
+#define FIRMWARE_ID                     "v1.0.1"
+// v1.0.1-bot-primary.ino
+// Primary bot firmware - Version 1.0.1
+// Over v1.0.0 layer, added WTM functionality and API calls for destination and parcel drop updates
 
 #include "driver/twai.h"
 #include "driver/gpio.h"
@@ -9,6 +10,7 @@
 #include <Preferences.h>
 #include <unordered_map>
 #include "esp_system.h"
+#include <Adafruit_MCP23X17.h>
 using namespace std;
 
 //=============================================================================
@@ -29,6 +31,10 @@ bool loggerFlag = true;  // Enable/disable HTTP debug logging
 #define BUZZER                      13
 #define COLUMN_INDICATOR_SENSOR     33
 #define TRAFFIC_INDICATOR_SENSOR    35
+#define PANEL_LED_BUTTON 7
+#define EMG_PIN 12
+#define AFC_PIN_1 19
+#define AFC_PIN_2 18
 
 // Station Reader Photodiode Pins
 #define SR_D1                       36
@@ -360,6 +366,90 @@ unsigned long last_position_read_time = 0;
 const unsigned long POSITION_READ_INTERVAL = 50;  // 50ms between position reads
 
 //=============================================================================
+// GLOBAL VARIABLES - WTM COLUMN STATE MACHINE
+//=============================================================================
+
+WTMColumnState wtm_column_state = WTM_BETWEEN_COLUMNS;
+
+// Frame counts for each possible column state
+int frameCount00 = 0;
+int frameCount01 = 0;
+int frameCount10 = 0;
+int frameCount11 = 0;
+
+// Confirmation variables
+int exitConfirmationCount = 0;  // Count of consecutive 00 samples
+const int EXIT_CONFIRMATION_THRESHOLD = 5;  // Need 5 consecutive 00s to confirm exit (relaxed from 10)
+
+// Column tracking
+String detectedColumnCode = "";  // The actual column code (01, 10, or 11)
+String currentColumnCode = "";    // Current column code being read
+String previousColumnCode = "";   // Previous column code that was detected
+
+// Health monitoring thresholds
+const float MAJORITY_SAFE_THRESHOLD = 80.0;      // > 80% is safe
+const float MAJORITY_WARNING_THRESHOLD = 60.0;   // 60-80% is warning, < 60% is critical
+const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
+const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning, > 40% is critical
+const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Conservative threshold for column width
+const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames to consider valid column (filter noise)
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected minimum frames for empty space (relaxed from 30)
+const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 readings is safe for empty space
+
+HealthStatus majorityHealthWTM = SAFE;
+HealthStatus minorityHealthWTM = SAFE;
+HealthStatus overallHealthWTM = SAFE;
+
+// Empty space tracking for health monitoring
+int emptySpaceFrameCount = 0;        // Frame count for current empty space (pure 00s)
+int emptySpaceNoiseFrameCount = 0;   // Count of non-00 frames detected during empty space (for health)
+int emptySpaceTotalFrameCount = 0;   // Total frames in empty space including noise
+HealthStatus emptySpaceHealth = SAFE; // Health of empty space (should have minimal non-00 readings)
+HealthStatus emptySpaceMajorityHealth = SAFE;  // Majority health (00 frames)
+HealthStatus emptySpaceMinorityHealth = SAFE;  // Minority health (noise frames)
+int totalEmptySpacesDetected = 0;    // Total empty spaces detected
+int totalFramesBetweenSpaces = 0;
+
+// Column completion flag and data - set when column successfully read
+bool columnJustCompleted = false;      // Flag: true when column just finished reading
+String lastCompletedColumnCode = "";   // The column code that was just read (01, 10, 11)
+HealthStatus lastCompletedColumnHealth = SAFE;  // Health of the column that was just read
+
+// Tracking variables for station-to-station segment
+int uniqueColumnsDetectedInSegment = 0;  // Count of unique columns (01, 10, 11) between stations
+int emptySpacesDetectedInSegment = 0;    // Count of 00 zones between stations
+
+int totalColumnsDetected = 0;
+
+// =============================================================================
+// GLOBAL VARIABLES - DROPPING AND DESTINATION UPDATES
+// =============================================================================
+
+String previous_station = "X";
+String dropoff_station = "X";
+bool get_destination_api_flag = false;
+bool clear_infeed_api_flag = false;
+bool start_infeed_api_column_counter = false;
+int infeed_api_column_counter = 0;
+String previous_combo_for_infeed_api = "00";
+bool update_parcel_dropped_in_the_dump_api_flag = false;
+bool update_parcel_dropped_api_flag = false;
+
+bool start_column_counter = false;
+int column_counter = 0;
+String previous_combo = "00";
+
+TaskHandle_t api_task;
+const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
+HTTPClient _http;
+
+// =============================================================================
+// GLOBAL VARIABLES - FLAP CONTROL
+// =============================================================================
+bool closing_flap = false;
+unsigned long start_closing_time;
+
+//=============================================================================
 // MISCELLANEOUS GLOBAL VARIABLES
 //=============================================================================
 int application_error_code = -1;
@@ -375,6 +465,8 @@ TaskHandle_t http_debug_log_task;
 
 // Synchronization primitives
 SemaphoreHandle_t xDebugLogMutex;  // Protects debugLoggingString (accessed from multiple cores/tasks)
+
+Adafruit_MCP23X17 mcp;              // I/O expander object
 
 //=============================================================================
 // FORWARD DECLARATIONS - MODBUS RTU FUNCTIONS
@@ -436,7 +528,7 @@ void CheckColumnIntensityWarningLevel(String segment) {
     }
 
     if (status != "Healthy") {
-      // add_log("Photodiode " + String(i + 1) + ": " + status);
+      add_log("Photodiode " + String(i + 1) + ": " + status);
     }
   }
 }
@@ -1082,6 +1174,250 @@ int16_t readPositionRear() {
   return -1;
 }
 
+// =============================================================================
+// WTM SENSOR READING AND PROCESSING FUNCTIONS
+// =============================================================================
+
+// Function to read TI and CI sensor combo
+String ReadSensorCombo() {
+  int trafficDetected = !digitalRead(TRAFFIC_INDICATOR_SENSOR);
+  int columnDetected = !digitalRead(COLUMN_INDICATOR_SENSOR);
+  return String(trafficDetected) + String(columnDetected);
+}
+
+// Function to handle column detection and processing
+void ProcessColumnDetection(String combo) {
+  // Column detection state machine
+  switch (wtm_column_state) {
+    case WTM_BETWEEN_COLUMNS:
+      // We're in the 00 zone between columns
+      if (combo == "00") {
+        emptySpaceFrameCount++;
+      } else {
+        // Detected non-00 in empty space - transition to column
+        wtm_column_state = WTM_IN_COLUMN;
+        totalFramesBetweenSpaces = 0;
+        emptySpaceNoiseFrameCount = 0;
+        frameCount00 = 0;
+        frameCount01 = 0;
+        frameCount10 = 0;
+        frameCount11 = 0;
+        exitConfirmationCount = 0;
+        
+        // Count the first frame that triggered the transition
+        if (combo == "01") {
+          frameCount01 = 1;
+          totalFramesBetweenSpaces = 1;
+        } else if (combo == "10") {
+          frameCount10 = 1;
+          totalFramesBetweenSpaces = 1;
+        } else if (combo == "11") {
+          frameCount11 = 1;
+          totalFramesBetweenSpaces = 1;
+        }
+      }
+      break;
+
+    case WTM_IN_COLUMN:
+      // Count all frames by type
+      if (combo == "00") {
+        frameCount00++;
+      } else if (combo == "01") {
+        frameCount01++;
+        totalFramesBetweenSpaces++;
+        if (frameCount01 > max(frameCount10, frameCount11)) {
+          detectedColumnCode = "01";
+          previousColumnCode = currentColumnCode;
+          currentColumnCode = "01";
+        }
+      } else if (combo == "10") {
+        frameCount10++;
+        totalFramesBetweenSpaces++;
+        if (frameCount10 > max(frameCount01, frameCount11)) {
+          detectedColumnCode = "10";
+          previousColumnCode = currentColumnCode;
+          currentColumnCode = "10";
+        }
+      } else if (combo == "11") {
+        frameCount11++;
+        totalFramesBetweenSpaces++;
+        if (frameCount11 > max(frameCount01, frameCount10)) {
+          detectedColumnCode = "11";
+          previousColumnCode = currentColumnCode;
+          currentColumnCode = "11";
+        }
+      }
+      
+      // Check if we're exiting the column
+      if (combo == "00") {
+        exitConfirmationCount++;
+        if (exitConfirmationCount >= EXIT_CONFIRMATION_THRESHOLD) {
+          // Validate minimum frames threshold
+          if (totalFramesBetweenSpaces < MIN_COLUMN_FRAMES_THRESHOLD) {
+            add_log("Fluke: " + String(totalFramesBetweenSpaces) + "f (01:" + String(frameCount01) + ",10:" + String(frameCount10) + ",11:" + String(frameCount11) + ") Rec:" + String(emptySpaceFrameCount + exitConfirmationCount));
+            
+            emptySpaceFrameCount += EXIT_CONFIRMATION_THRESHOLD;
+            emptySpaceTotalFrameCount = emptySpaceFrameCount + totalFramesBetweenSpaces;
+            emptySpaceNoiseFrameCount += totalFramesBetweenSpaces;
+            wtm_column_state = WTM_BETWEEN_COLUMNS;
+            return;
+          } else {
+            emptySpaceTotalFrameCount = emptySpaceFrameCount;
+          }
+          
+          // Valid column detected - calculate empty space health
+          if (emptySpaceFrameCount > 0) {
+            totalEmptySpacesDetected++;
+            emptySpacesDetectedInSegment++;
+            
+            // Calculate empty space health using majority and minority approach
+            emptySpaceMajorityHealth = CalculateMajorityHealth(emptySpaceFrameCount, DEFAULT_EMPTY_SPACE_THRESHOLD);
+            emptySpaceMinorityHealth = CalculateMinorityHealth(emptySpaceNoiseFrameCount, emptySpaceTotalFrameCount);
+            emptySpaceHealth = GetWorstHealth(emptySpaceMajorityHealth, emptySpaceMinorityHealth);
+            
+            add_log("TES:" + String(totalEmptySpacesDetected) + " ES" + String(emptySpacesDetectedInSegment) + ":" + String(emptySpaceFrameCount) + "f " + HealthToString(emptySpaceHealth));
+            emptySpaceNoiseFrameCount = 0;
+          }
+          
+          totalColumnsDetected++;
+          uniqueColumnsDetectedInSegment++;
+          
+          // Update previous and current column codes
+          previousColumnCode = detectedColumnCode;
+          currentColumnCode = "00";
+          
+          columnJustCompleted = true;
+          lastCompletedColumnCode = detectedColumnCode;
+          lastCompletedColumnHealth = AnalyzeWTMColumnHealth();
+          
+          wtm_column_state = WTM_BETWEEN_COLUMNS;
+          emptySpaceFrameCount = EXIT_CONFIRMATION_THRESHOLD;
+        }
+      } else {
+        exitConfirmationCount = 0;
+      }
+      break;
+  }
+}
+
+// Function to handle column-based decisions
+void HandleColumnDecisions() {
+  if (columnJustCompleted) {
+    if (drive_motor_current_state == DRIVE_MOTOR_SWEEPING_COLUMN) {
+      column_detected_in_sweep = true;
+    }
+    if (lastCompletedColumnCode == "11") {
+      // add_log("Traffic Detected");
+      traffic_permission = false;
+    } else if (lastCompletedColumnCode == "01") {
+      // add_log("Traffic Not Detected");
+      traffic_permission = true;
+    } else if (lastCompletedColumnCode == "10") {
+      // add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
+    }
+    
+    if (lastCompletedColumnHealth == CRITICAL) {
+      // Column health is critical - may need maintenance
+    }
+    
+    columnJustCompleted = false;
+  }
+}
+
+// ==============================================================================
+// DROPPING FLAP CONTROLS
+// ==============================================================================
+
+// Function to close the flap
+void CloseFlap() {
+  digitalWrite(EMG_PIN, HIGH);
+  digitalWrite(AFC_PIN_1, LOW);
+  digitalWrite(AFC_PIN_2, HIGH);
+}
+
+// Function to open the flap
+void OpenFlap() {
+  digitalWrite(EMG_PIN, LOW);
+}
+
+// Function to stage the flap
+void StageFlap() {
+  digitalWrite(AFC_PIN_1, HIGH);
+  digitalWrite(AFC_PIN_2, LOW);
+}
+
+// ==============================================================================
+// DESTINATION AND INFEED API HANDLING FUNCTIONS
+// ==============================================================================
+
+void GetDestinationAndJourneyPath() {
+  String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=MyntraSingleScan&retries=0&sectionId=S1";
+  int httpCode = 0;
+  add_log("Get Destination API call: " + url);
+  _http.begin(url);
+  httpCode = _http.GET();
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+    add_log("Get Destination API response: " + response);
+  } else {
+    add_log("Error: " + _http.getString());
+  }
+  _http.end();
+  
+  if (response == "") {
+    dropoff_station = "D18";
+  } else {
+    int destinationIndex = response.indexOf('-');
+    dropoff_station = response.substring(0, destinationIndex);
+  }
+}
+
+void UpdateParcelDropped() {
+  String url = DMS_URL_PREFIX + "UpdateParcelDroppedForBot?botId=" + BOT_ID + "&sectionIds=S1&infeedStationId=I1";
+  int httpCode = 0;
+    add_log("Update succesful drop API call: " + url);
+  _http.begin(url);
+  httpCode = _http.PUT(url);
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+    add_log("Update API response: " + response);
+  } else {
+    add_log("Error: " + _http.getString());
+  }
+  _http.end();
+}
+
+void UpdateParcelDroppedInTheDump() {
+  String url = DMS_URL_PREFIX + "UpdateParcelDroppedInDumpForBot?botId=" + BOT_ID + "&sectionIds=S1&infeedStationId=I1&reason=FailedDetection";
+  int httpCode = 0;
+  add_log("Update Parcel Dropped In Dump API call: " + url);
+  _http.begin(url);
+  httpCode = _http.PUT(url);
+  String response = "";
+  if (httpCode == HTTP_CODE_OK) {
+    response = _http.getString();
+    add_log("Update API response: " + response);  
+  } else {
+    add_log("Error: " + _http.getString());
+  }
+  _http.end();
+}
+
+void ClearInfeedStation() {
+  String url = DMS_URL_PREFIX + "ClearInfeedStations?infeedStationId=I1";
+  int httpCode = 0;
+  add_log("Clear Infeed Station API call: " + url);
+  _http.begin(url);
+  while (httpCode != HTTP_CODE_OK) {
+    httpCode = _http.PUT(url);
+    add_log("Clear Infeed Station API response: " + String(_http.getString()));
+    delay(100);
+  }
+  _http.end();
+}
+
 // ==============================================================================
 // RTOS TASKS
 // ==============================================================================
@@ -1125,6 +1461,92 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
       }
       add_log("Current Station: " + current_station + ", Expected Station: " + expected_station + ", Direction: " + String(diverter_track_edge_direction) + ", Permitted Speed: " + String(permitted_edge_speed));
     }
+
+    // Read TI/CI sensors and process column detection
+    int trafficDetected = !digitalRead(TRAFFIC_INDICATOR_SENSOR);
+    int columnDetected = !digitalRead(COLUMN_INDICATOR_SENSOR);
+    String combo = String(trafficDetected) + String(columnDetected);
+    ProcessColumnDetection(combo);
+    HandleColumnDecisions();
+
+    // ---------------------------------------------------------------- Infeed Controller --------------------------------------------------------
+    if (previous_station != current_station) {
+      if (current_station == "I12") {
+        start_column_counter = true;
+      }
+    }
+    
+    if (combo == "11") {
+      if (previous_combo == "00") {
+        if (start_column_counter) {
+          column_counter++;
+          if(column_counter >= 3) {
+            add_log("Actual speed changed after 3 columns");
+            permitted_edge_speed = S1;
+            // add_log("SET SPEED UPDATE TO: " + String(setSpeed) + " BCZ IT WILL START FROM INFEED STOP POINT");
+            beep_flag = true;
+            start_column_counter = false;
+            column_counter = 0;
+            start_infeed_api_column_counter = true;
+          }
+        }
+      }
+    }
+    if (combo == "00") previous_combo = combo;
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    // ----------------------------------------------------------- Destination Controller --------------------------------------------------------
+    if (previous_station != current_station) {
+      if(current_station == dropoff_station) {
+        if (dropoff_station == "D18") {
+          update_parcel_dropped_in_the_dump_api_flag = true;
+        } else {
+          update_parcel_dropped_api_flag = true;
+        }
+      }
+    }
+    
+    if (combo == "11") {
+      if(previous_combo_for_infeed_api == "00") {
+        if (start_infeed_api_column_counter) {
+          if (drive_motor_current_direction == DRIVE_MOTOR_FORWARD) {
+            infeed_api_column_counter++;
+          } else if (drive_motor_current_direction == DRIVE_MOTOR_REVERSE) {
+            infeed_api_column_counter -= 2;
+          }
+          if(infeed_api_column_counter >= 10) {
+            beep_flag = true;
+            get_destination_api_flag = true;
+            infeed_api_column_counter = 0;
+            start_infeed_api_column_counter = false;
+          }
+        }
+      }
+    }
+    if (combo == "00") previous_combo_for_infeed_api = combo;
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    // --------------------------------------------------------------- AFC Controller ------------------------------------------------------------
+    if (previous_station != current_station) {
+      if(current_station == dropoff_station && dropoff_station != "X") {
+        add_log("Opening the flap");
+        OpenFlap();
+        closing_flap = true;
+        start_closing_time = millis();
+      } else if (current_station == "I12") {
+        add_log("Staging the flap");
+        StageFlap();
+      }
+    }
+
+    if (closing_flap && millis() - start_closing_time >= 1000) {
+      add_log("Closing the flap");
+      CloseFlap();
+      closing_flap = false;
+    }
+    // -------------------------------------------------------------------------------------------------------------------------------------------
+
+    previous_station = current_station;
 
     // Update drive motor state machine
     if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
@@ -1373,6 +1795,35 @@ void ACTUATION_TASK(void* pvParameters) {
   }
 }
 
+// API Handling Task
+void API_TASK(void* pvParameters) {
+  while (true) {
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    if (get_destination_api_flag) {
+      GetDestinationAndJourneyPath();
+      clear_infeed_api_flag = true;
+      get_destination_api_flag = false;
+    }
+
+    if (clear_infeed_api_flag) {
+      ClearInfeedStation();
+      clear_infeed_api_flag = false;
+    }
+
+    if (update_parcel_dropped_in_the_dump_api_flag) {
+      UpdateParcelDroppedInTheDump();
+      update_parcel_dropped_in_the_dump_api_flag = false;
+      dropoff_station = "X";
+    }
+
+    if (update_parcel_dropped_api_flag) {
+      UpdateParcelDropped();
+      update_parcel_dropped_api_flag = false;
+      dropoff_station = "X";
+    }
+  }
+}
+
 //=============================================================================
 // MAIN SETUP FUNCTION
 // Initialization sequence critical for proper operation - DO NOT REORDER
@@ -1380,10 +1831,11 @@ void ACTUATION_TASK(void* pvParameters) {
 void setup() {
   // 1. Initialize Serial for debugging (FIRST)
   Serial.begin(115200);
+  Serial.println(__FILE__);
   delay(500);  // Short delay for hardware stabilization
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║   BOT PRIMARY FIRMWARE v1.0.0          ║");
+  Serial.println("║   BOT PRIMARY FIRMWARE v1.0.1          ║");
   Serial.println("╚════════════════════════════════════════╝\n");
   
   // 2. Initialize mutex for thread-safe logging (BEFORE any add_log() calls)
@@ -1404,13 +1856,16 @@ void setup() {
   
   // 5. Connect to WiFi (uses add_log, needs mutex and BOT_ID)
   WiFiConfig();
+
+  // 6a. Configure MCP2515 CAN controller
+  MCPConfig();
   
-  // 6. Configure GPIO pins
+  // 6b. Configure GPIO pins
   PinConfig();
   Serial.println("✓ GPIO pins configured");
   
   // 7. Beep to indicate initialization started (if buzzer available)
-  // Beep();  // Uncomment when Beep function is available
+  Beep();
   
   // 8. Motor power-up delay (BEFORE CAN/Motor init)
   Serial.println("⏳ Waiting for motor/driver power-up...");
@@ -1489,6 +1944,18 @@ void setup() {
     4,
     &actuation_task,
     1);
+
+  vTaskDelay(pdMS_TO_TICKS(20));
+  
+  // API handling task on Core 0 (Priority 3) - MEDIUM priority
+  xTaskCreatePinnedToCore(
+    API_TASK,
+    "api_task",
+    4096,
+    NULL,
+    3,
+    &api_task,
+    0);
   
   Serial.println("✓ Initialization complete\n");
 }
@@ -1496,6 +1963,102 @@ void setup() {
 void loop() {
   // Empty - all functionality handled by RTOS tasks
   delay(1000); 
+}
+
+// =============================================================================
+// WTM COLUMN HEALTH ANALYSIS FUNCTIONS
+// =============================================================================
+
+// Calculate health status based on majority frame count
+HealthStatus CalculateMajorityHealth(int majorityCount, int threshold) {
+  if (threshold == 0) return SAFE;
+  
+  float percentage = (float)majorityCount / threshold * 100.0;
+  
+  if (percentage > MAJORITY_SAFE_THRESHOLD) {
+    return SAFE;
+  } else if (percentage >= MAJORITY_WARNING_THRESHOLD) {
+    return WARNING;
+  } else {
+    return CRITICAL;
+  }
+}
+
+// Calculate health status based on minority frame counts
+HealthStatus CalculateMinorityHealth(int minorityTotal, int totalFrames) {
+  if (totalFrames == 0) return SAFE;
+  
+  float percentage = (float)minorityTotal / totalFrames * 100.0;
+  
+  if (percentage < MINORITY_SAFE_THRESHOLD) {
+    return SAFE;
+  } else if (percentage <= MINORITY_WARNING_THRESHOLD) {
+    return WARNING;
+  } else {
+    return CRITICAL;
+  }
+}
+
+// Calculate empty space health using majority (00 frames) and minority (noise frames) approach
+HealthStatus CalculateEmptySpaceHealth(int majorityFrames, int noiseFrames, int totalFrames) {
+  if (totalFrames == 0) return SAFE;
+  
+  // Calculate majority health (00 frames should be > 80% of total)
+  HealthStatus majorityHealth = CalculateMajorityHealth(majorityFrames, DEFAULT_EMPTY_SPACE_THRESHOLD);
+  
+  // Calculate minority health (noise frames should be < 20% of total)
+  HealthStatus minorityHealth = CalculateMinorityHealth(noiseFrames, totalFrames);
+  
+  // Overall health is worst of both (AND operation)
+  return GetWorstHealth(majorityHealth, minorityHealth);
+}
+
+// Get worst health status between two statuses
+HealthStatus GetWorstHealth(HealthStatus h1, HealthStatus h2) {
+  if (h1 == CRITICAL || h2 == CRITICAL) return CRITICAL;
+  if (h1 == WARNING || h2 == WARNING) return WARNING;
+  return SAFE;
+}
+
+// Analyze column detection and report health
+HealthStatus AnalyzeWTMColumnHealth() {
+  if (detectedColumnCode == "") return SAFE;
+  
+  // Total frames during column reading (excluding 00 exit confirmation frames)
+  int totalColumnFrames = frameCount01 + frameCount10 + frameCount11;
+  int totalFrames = frameCount00 + totalColumnFrames;  // All frames including noise
+  
+  // Determine majority and minority counts
+  int majorityCount = 0;
+  int minorityTotal = 0;
+  String majorityCode = "";
+  
+  // Find the majority (should match detected column code)
+  if (detectedColumnCode == "01") {
+    majorityCount = frameCount01;
+    majorityCode = "01";
+    minorityTotal = frameCount10 + frameCount11;  // Other column readings (not 00)
+  } else if (detectedColumnCode == "10") {
+    majorityCount = frameCount10;
+    majorityCode = "10";
+    minorityTotal = frameCount01 + frameCount11;
+  } else if (detectedColumnCode == "11") {
+    majorityCount = frameCount11;
+    majorityCode = "11";
+    minorityTotal = frameCount01 + frameCount10;
+  }
+  
+  // Calculate health
+  // Majority: Use static threshold (DEFAULT_COLUMN_FRAME_THRESHOLD or maxCount)
+  majorityHealthWTM = CalculateMajorityHealth(majorityCount, DEFAULT_COLUMN_FRAME_THRESHOLD);
+  
+  // Minority: Use total frames captured from previous empty space to current empty space
+  minorityHealthWTM = CalculateMinorityHealth(minorityTotal, totalFramesBetweenSpaces);
+  overallHealthWTM = GetWorstHealth(majorityHealthWTM, minorityHealthWTM);
+  
+  // Compact log for memory efficiency
+  // add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
+  return overallHealthWTM;
 }
 
 //=============================================================================
@@ -2436,6 +2999,16 @@ String DriveMotorDirectionToString(DriveMotorDirection dir) {
   }
 }
 
+// Convert health status to string
+String HealthToString(HealthStatus health) {
+  switch(health) {
+    case SAFE: return "SAFE";
+    case WARNING: return "WARNING";
+    case CRITICAL: return "CRITICAL";
+    default: return "UNKNOWN";
+  }
+}
+
 // Function to make a beep sound using the buzzer
 void Beep() {
   digitalWrite(BUZZER, HIGH);
@@ -2507,11 +3080,26 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
 // GPIO CONFIGURATION
 //=============================================================================
 
+// Configure MCP23017 I/O expander
+void MCPConfig() {
+  if (!mcp.begin_I2C()) {
+    Serial.println("MCP Error.");
+  }
+}
+
 // Configure GPIO pins for sensors and buzzer
 void PinConfig() {
-  pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);
-  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);
+  pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);       // Traffic indicator pin config
+  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);      // Column indicator pin config
+  mcp.pinMode(PANEL_LED_BUTTON, INPUT_PULLUP);
+  pinMode(EMG_PIN, OUTPUT);
   pinMode(BUZZER, OUTPUT);
+  pinMode(AFC_PIN_1, OUTPUT);
+  pinMode(AFC_PIN_2, OUTPUT);
+
+  digitalWrite(EMG_PIN, HIGH);
+  digitalWrite(AFC_PIN_1, LOW);
+  digitalWrite(AFC_PIN_2, LOW);
 }
 
 //=============================================================================
@@ -2580,4 +3168,3 @@ void WiFiConfig() {
     add_log("WiFi failed");
   }
 }
-
