@@ -1,22 +1,26 @@
-#define FIRMWARE_VERSION "d542"
+#define FIRMWARE_VERSION "d543"
 /*
- * Library-less Diverter State Machine Control
- * ============================================
+ * Integrated Bot Control System - Library-less Implementation
+ * ============================================================
  * 
- * This sketch controls front and rear diverter servos using raw Modbus RTU
- * over UART without external libraries. It implements the diverter state
- * machine with proper synchronization between both servos.
+ * This firmware controls both the diverter system and drive motor for automated
+ * warehouse bot operations. Implements library-less communication protocols for
+ * direct hardware control and better diagnostics.
  * 
- * Hardware:
- * - ESP32
- * - Front Servo (ID 2) and Rear Servo (ID 3) on Serial2
- * - GPIO 25 RX, GPIO 32 TX
+ * Hardware Components:
+ * - ESP32 Dual-Core Controller
+ * - Front & Rear Diverter Servos (Modbus RTU via Serial2)
+ * - EPOS4 Drive Motor Controller (CANopen via TWAI)
+ * - WTM Column Detection Sensors (GPIO)
  * 
- * Features:
- * - Full state machine: STOP, LEFT, RIGHT, SWITCHING, ERROR
- * - Synchronized front/rear movement
- * - Library-less Modbus implementation
- * - Comprehensive error handling and diagnostics
+ * Key Features:
+ * - Diverter State Machine: STOP, LEFT, RIGHT, SWITCHING, ERROR
+ * - Drive Motor State Machine: STOP, STOPPING, RUNNING, SWEEPING_COLUMN, ERROR
+ * - Library-less Modbus RTU for servo communication
+ * - CANopen SDO protocol for motor control
+ * - Column detection with health monitoring
+ * - HTTP debug logging with WiFi
+ * - RTOS task management for multi-core operation
  */
 
 #include "driver/twai.h"
@@ -25,15 +29,19 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+//=============================================================================
+// GPIO PIN DEFINITIONS
+//=============================================================================
+#define BUZZER                      13
+#define COLUMN_INDICATOR_SENSOR     33
+#define TRAFFIC_INDICATOR_SENSOR    35
+
+//=============================================================================
+// SERVO CONFIGURATION (MODBUS RTU)
+//=============================================================================
 #define RX_PIN              25
 #define TX_PIN              32
 #define BAUDRATE            115200
-#define BUZZER              13
-#define COLUMN_INDICATOR_SENSOR     33
-#define TRAFFIC_INDICATOR_SENSOR    35
 
 #define FRONT_SERVO_ID      2
 #define REAR_SERVO_ID       3
@@ -41,7 +49,7 @@
 #define ENABLE              1
 #define DISABLE             0
 
-// Register Addresses (From SMS.h)
+// SMS Servo Register Addresses (Modbus)
 #define REG_TORQUE_ENABLE   129
 #define REG_GOAL_POSITION   128
 #define REG_PRESENT_POS     257
@@ -99,15 +107,16 @@
 #define S3            1604  // 3.0 m/s
 
 //=============================================================================
-// TIMING CONSTANTS
+// TIMING AND COMMUNICATION CONSTANTS
 //=============================================================================
-#define SDO_RESPONSE_TIMEOUT        10    // SDO response timeout (ms)
-#define MOTOR_POWERUP_DELAY         5000  // Motor power-up delay (ms)
+#define SDO_RESPONSE_TIMEOUT        10    // CAN SDO response timeout (ms)
+#define MOTOR_POWERUP_DELAY         5000  // Motor controller power-up delay (ms)
 
-// ============================================================================
-// ENUMERATIONS
-// ============================================================================
-// CAN operation status codes
+//=============================================================================
+// ENUMERATIONS AND TYPE DEFINITIONS
+//=============================================================================
+
+// CAN/CANopen operation status codes
 enum CANStatus {
   CAN_OK = 0,
   CAN_TX_TIMEOUT,
@@ -187,12 +196,8 @@ struct SimpleCANFrame {
   bool     rtr;
 };
 
-// ============================================================================
-// GLOBAL VARIABLES
-// ============================================================================
-
 //=============================================================================
-// WIFI AND HTTP CONFIGURATION
+// WIFI AND HTTP DEBUG LOGGING
 //=============================================================================
 const String CODE_ID = "d543";
 const char* SSID = "Server_PC";
@@ -200,6 +205,9 @@ const char* PASSWORD = "msort@flexli";
 const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
 const String ENTITY_TYPE = "bot";
 
+//=============================================================================
+// GLOBAL VARIABLES - SYSTEM IDENTIFICATION AND LOGGING
+//=============================================================================
 
 String BOT_ID = "B";
 String debugLoggingString = "";
@@ -208,10 +216,10 @@ TaskHandle_t httpDebugLog;
 bool loggerFlag = true;
 
 //=============================================================================
-// GLOBAL VARIABLES - COLUMN DETECTION (WTM)
+// GLOBAL VARIABLES - WTM COLUMN DETECTION SYSTEM
 //=============================================================================
 
-// State machine state
+// Column detection state machine
 WTMColumnState wtm_column_state = WTM_BETWEEN_COLUMNS;
 
 // Frame counters for each sensor combination
@@ -255,10 +263,10 @@ int emptySpacesDetectedInSegment = 0;    // Count of 00 zones between stations
 int totalColumnsDetected = 0;
 
 //=============================================================================
-// GLOBAL VARIABLES - DRIVE MOTOR STATE MACHINE
+// GLOBAL VARIABLES - DRIVE MOTOR CONTROL
 //=============================================================================
 
-// Permission and assignment flags
+// Permission flags and operational parameters
 bool traffic_permission = true;
 bool global_error_permission = true;
 bool current_assignment = true;
@@ -289,6 +297,22 @@ volatile bool firstTimeError = false;
 SemaphoreHandle_t xDebugLogMutex;  // Protects debugLoggingString (accessed from Core 0 and Core 1)
 
 //=============================================================================
+// DEBUG LOGGING AND DIAGNOSTICS
+//=============================================================================
+
+// Thread-safe logging function (protected by mutex for cross-core access)
+void add_log(String log) {
+  if (xDebugLogMutex != NULL) {
+    if (xSemaphoreTake(xDebugLogMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      debugLoggingString += " | " + log;
+      xSemaphoreGive(xDebugLogMutex);
+    }
+  } else {
+    debugLoggingString += " | " + log;
+  }
+}
+
+//=============================================================================
 // COLUMN DETECTION THRESHOLDS
 //=============================================================================
 const int EXIT_CONFIRMATION_THRESHOLD = 5;      // Consecutive 00s to confirm column exit
@@ -303,9 +327,119 @@ const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
 const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning
 const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 is safe
 
+//=============================================================================
+// COLUMN HEALTH MONITORING FUNCTIONS
+//=============================================================================
+
+// Convert health status to string
+String HealthToString(HealthStatus health) {
+  switch(health) {
+    case SAFE: return "SAFE";
+    case WARNING: return "WARNING";
+    case CRITICAL: return "CRITICAL";
+    default: return "UNKNOWN";
+  }
+}
+
+// Calculate health status based on majority frame count against threshold
+HealthStatus CalculateMajorityHealth(int majorityCount, int threshold) {
+  if (threshold == 0) return SAFE;
+  
+  float percentage = (float)majorityCount / threshold * 100.0;
+  
+  if (percentage > MAJORITY_SAFE_THRESHOLD) {
+    return SAFE;
+  } else if (percentage >= MAJORITY_WARNING_THRESHOLD) {
+    return WARNING;
+  } else {
+    return CRITICAL;
+  }
+}
+
+// Calculate health status based on minority frame counts
+HealthStatus CalculateMinorityHealth(int minorityTotal, int totalFrames) {
+  if (totalFrames == 0) return SAFE;
+  
+  float percentage = (float)minorityTotal / totalFrames * 100.0;
+  
+  if (percentage < MINORITY_SAFE_THRESHOLD) {
+    return SAFE;
+  } else if (percentage <= MINORITY_WARNING_THRESHOLD) {
+    return WARNING;
+  } else {
+    return CRITICAL;
+  }
+}
+
+// Calculate empty space health using majority (00 frames) and minority (noise frames) approach
+HealthStatus CalculateEmptySpaceHealth(int majorityFrames, int noiseFrames, int totalFrames) {
+  if (totalFrames == 0) return SAFE;
+  
+  // Calculate majority health (00 frames should be > 80% of total)
+  HealthStatus majorityHealth = CalculateMajorityHealth(majorityFrames, DEFAULT_EMPTY_SPACE_THRESHOLD);
+  
+  // Calculate minority health (noise frames should be < 20% of total)
+  HealthStatus minorityHealth = CalculateMinorityHealth(noiseFrames, totalFrames);
+  
+  // Overall health is worst of both (AND operation)
+  return GetWorstHealth(majorityHealth, minorityHealth);
+}
+
+// Get worst health status between two statuses
+HealthStatus GetWorstHealth(HealthStatus h1, HealthStatus h2) {
+  if (h1 == CRITICAL || h2 == CRITICAL) return CRITICAL;
+  if (h1 == WARNING || h2 == WARNING) return WARNING;
+  return SAFE;
+}
+
+// Analyze column detection and report health
+HealthStatus AnalyzeWTMColumnHealth() {
+  if (detectedColumnCode == "") return SAFE;
+  
+  // Total frames during column reading (excluding 00 exit confirmation frames)
+  int totalColumnFrames = frameCount01 + frameCount10 + frameCount11;
+  int totalFrames = frameCount00 + totalColumnFrames;  // All frames including noise
+  
+  // Determine majority and minority counts
+  int majorityCount = 0;
+  int minorityTotal = 0;
+  String majorityCode = "";
+  
+  // Find the majority (should match detected column code)
+  if (detectedColumnCode == "01") {
+    majorityCount = frameCount01;
+    majorityCode = "01";
+    minorityTotal = frameCount10 + frameCount11;  // Other column readings (not 00)
+  } else if (detectedColumnCode == "10") {
+    majorityCount = frameCount10;
+    majorityCode = "10";
+    minorityTotal = frameCount01 + frameCount11;
+  } else if (detectedColumnCode == "11") {
+    majorityCount = frameCount11;
+    majorityCode = "11";
+    minorityTotal = frameCount01 + frameCount10;
+  }
+  
+  // Calculate health
+  // Majority: Use static threshold (DEFAULT_COLUMN_FRAME_THRESHOLD or maxCount)
+  majorityHealthWTM = CalculateMajorityHealth(majorityCount, DEFAULT_COLUMN_FRAME_THRESHOLD);
+  
+  // Minority: Use total frames captured from previous empty space to current empty space
+  minorityHealthWTM = CalculateMinorityHealth(minorityTotal, totalFramesBetweenSpaces);
+  overallHealthWTM = GetWorstHealth(majorityHealthWTM, minorityHealthWTM);
+  
+  // Compact log for memory efficiency
+  add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
+  return overallHealthWTM;
+}
+
+//=============================================================================
+// GLOBAL VARIABLES - DIVERTER SERVO CONTROL
+//=============================================================================
+
 Preferences prefs;
 
-// Config variables
+// Diverter servo configuration (loaded from NVM)
 int front_diverter_left_limit = 0;
 int front_diverter_right_limit = 0;
 int front_diverter_tolerance = 0;
@@ -332,9 +466,13 @@ bool global_error_status = false;
 bool error_front_servo = false;
 bool error_rear_servo = false;
 
-// Target positions
-int front_target_position = -1;
-int rear_target_position = -1;
+// Set positions (desired target positions)
+int front_diverter_set_position = -1;
+int rear_diverter_set_position = -1;
+
+// Last commanded positions (to avoid redundant setPosition calls)
+int last_commanded_front_position = -1;
+int last_commanded_rear_position = -1;
 
 // Movement control
 bool enable_torque_flag = false;
@@ -684,10 +822,10 @@ void diagnoseESPError(esp_err_t err, const char* operation) {
 }
 
 //=============================================================================
-// LOW-LEVEL CAN FUNCTIONS (down to TWAI API)
+// CAN/TWAI LOW-LEVEL COMMUNICATION
 //=============================================================================
 
-// Initialize CAN hardware with alert monitoring
+// Initialize CAN hardware (500 kbit/s with full alert monitoring)
 bool CAN_Init() {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
     CAN_TX_PIN, 
@@ -788,10 +926,10 @@ CANStatus CAN_Receive(SimpleCANFrame* frame, uint32_t timeout_ms) {
 }
 
 //=============================================================================
-// CANOPEN SDO FUNCTIONS
+// CANOPEN SDO PROTOCOL (MOTOR COMMUNICATION)
 //=============================================================================
 
-// Send SDO Download (write) and wait for response with full diagnostics
+// SDO Write (Download): Send parameter to EPOS motor controller
 CANStatus SDO_Write(uint16_t index, uint8_t subindex, uint32_t value) {
   SimpleCANFrame tx_frame;
   
@@ -918,7 +1056,7 @@ CANStatus SDO_Read(uint16_t index, uint8_t subindex, uint32_t* value) {
 }
 
 //=============================================================================
-// MOTOR CONTROL FUNCTIONS
+// DRIVE MOTOR CONTROL COMMANDS
 //=============================================================================
 
 CANStatus shutdown() {
@@ -1048,9 +1186,9 @@ bool MotorConfig() {
   return true;
 }
 
-// ============================================================================
-// LOW-LEVEL MODBUS FUNCTIONS
-// ============================================================================
+//=============================================================================
+// MODBUS RTU PROTOCOL (SERVO COMMUNICATION)
+//=============================================================================
 
 uint16_t calcCRC(uint8_t *data, uint8_t len) {
   uint16_t crc = 0xFFFF;
@@ -1111,9 +1249,9 @@ int readResponse(uint8_t *buffer, int expectedLen, int timeoutMs = 100) {
   return bytesRead;
 }
 
-// ============================================================================
-// SERVO COMMANDS - FRONT SERVO
-// ============================================================================
+//=============================================================================
+// DIVERTER SERVO COMMANDS - FRONT SERVO
+//=============================================================================
 
 bool enableTorqueFront(bool enable) {
   uint8_t txBuf[8], rxBuf[8];
@@ -1172,9 +1310,9 @@ int16_t readPositionFront() {
   return -1;
 }
 
-// ============================================================================
-// SERVO COMMANDS - REAR SERVO
-// ============================================================================
+//=============================================================================
+// DIVERTER SERVO COMMANDS - REAR SERVO
+//=============================================================================
 
 bool enableTorqueRear(bool enable) {
   uint8_t txBuf[8], rxBuf[8];
@@ -1233,9 +1371,9 @@ int16_t readPositionRear() {
   return -1;
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
+//=============================================================================
+// DIVERTER STATE MACHINE HELPER FUNCTIONS
+//=============================================================================
 
 String DiverterStateToString(DiverterState state) {
   switch(state) {
@@ -1294,9 +1432,9 @@ void UpdateDiverterPositionHighLevel() {
   }
 }
 
-// ============================================================================
-// STATE MACHINE
-// ============================================================================
+//=============================================================================
+// DIVERTER STATE MACHINE LOGIC
+//=============================================================================
 
 DiverterStateChangeOptions UpdateDiverterState() {
   diverter_previous_state = diverter_current_state;
@@ -1384,6 +1522,7 @@ DiverterStateChangeOptions UpdateDiverterState() {
   return DIVERTER_UNEXPECTED_CONDITION;
 }
 
+// Execute state-specific actions for diverter state machine
 void ImplementDiverterState() {
   if (diverter_current_state == DIVERTER_STOP) {
     enable_torque_flag = false;
@@ -1404,20 +1543,20 @@ void ImplementDiverterState() {
     enable_torque_flag = true;
     
     if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
-      front_target_position = front_diverter_left_thresold;
-      rear_target_position = rear_diverter_left_thresold;
+      front_diverter_set_position = front_diverter_left_limit;
+      rear_diverter_set_position = rear_diverter_left_limit;
       Serial.print("→ SWITCHING to LEFT: F=");
-      Serial.print(front_target_position);
+      Serial.print(front_diverter_set_position);
       Serial.print(" R=");
-      Serial.println(rear_target_position);
+      Serial.println(rear_diverter_set_position);
     }
     else if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
-      front_target_position = front_diverter_right_thresold;
-      rear_target_position = rear_diverter_right_thresold;
+      front_diverter_set_position = front_diverter_right_limit;
+      rear_diverter_set_position = rear_diverter_right_limit;
       Serial.print("→ SWITCHING to RIGHT: F=");
-      Serial.print(front_target_position);
+      Serial.print(front_diverter_set_position);
       Serial.print(" R=");
-      Serial.println(rear_target_position);
+      Serial.println(rear_diverter_set_position);
     }
   }
   
@@ -1427,18 +1566,19 @@ void ImplementDiverterState() {
   }
 }
 
-// Function to read TI and CI sensor combo
+//=============================================================================
+// WTM COLUMN DETECTION STATE MACHINE
+//=============================================================================
+
+// Read sensor combination (Traffic Indicator + Column Indicator)
+// Returns: "00", "01", "10", or "11"
 String ReadSensorCombo() {
   int trafficDetected = !digitalRead(TRAFFIC_INDICATOR_SENSOR);
   int columnDetected = !digitalRead(COLUMN_INDICATOR_SENSOR);
   return String(trafficDetected) + String(columnDetected);
 }
 
-//=============================================================================
-// COLUMN DETECTION STATE MACHINE
-//=============================================================================
-
-// Process column detection state machine
+// Process incoming sensor data through column detection state machine
 void ProcessColumnDetection(String combo) {
   // Column detection state machine
   switch (wtm_column_state) {
@@ -1553,7 +1693,7 @@ void ProcessColumnDetection(String combo) {
   }
 }
 
-// Handle column-based decisions
+// Process actions when a column has been detected and validated
 void HandleColumnDecisions() {
   if (columnJustCompleted) {
     // Update sweep detection flag
@@ -1580,17 +1720,12 @@ void HandleColumnDecisions() {
   }
 }
 
-//=============================================================================
-// DRIVE MOTOR STATE MACHINE
+///=============================================================================
+// DRIVE MOTOR STATE MACHINE LOGIC
 //=============================================================================
 
-// Update drive motor state based on global variables
+// Evaluate state transitions for drive motor based on permissions and conditions
 DriveMotorStateOutput UpdateDriveMotorState() {
-    /*
-    Evaluates global variables and determines if state should change
-    Updates Current_State based on conditions and valid transitions
-    Returns: true if state was changed, false if no change
-    */
     drive_motor_previous_state = drive_motor_current_state;    
     // ----- FROM STOP STATE -----
     if (drive_motor_current_state == DRIVE_MOTOR_STOP) {
@@ -1713,7 +1848,7 @@ DriveMotorStateOutput UpdateDriveMotorState() {
     return DRIVE_MOTOR_UNKNOWN_STATE;  // No state change
 }
 
-// Implement state-specific actions
+// Execute state-specific actions for drive motor state machine
 void ImplementDriveMotorState() {
     String log_msg = "";
     
@@ -1767,25 +1902,42 @@ void ImplementDriveMotorState() {
     }
 }
 
-// ============================================================================
-// ACTUATION LOGIC (Now handled by DIVERTER_ACTUATION_TASK)
-// ============================================================================
-// Note: ActuateDiverter() logic has been moved to DIVERTER_ACTUATION_TASK
+//=============================================================================
+// NOTE: Actuation logic is implemented in RTOS tasks below
+//       - DIVERTER_STATE_TASK: State machine updates
+//       - ACTUATION_TASK: Hardware control (servos + motor)
+//=============================================================================
 
-// ============================================================================
-// RTOS TASK FUNCTIONS
-// ============================================================================
+//=============================================================================
+// RTOS TASK IMPLEMENTATIONS
+//=============================================================================
 
+// Task 1: Sensor Reading & State Machine (Core 1, Priority 5)
+// Handles column detection, drive motor state machine, then diverter state machine
 void SENSOR_READING_TASK(void* pvParameters) {
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(1));  // 1ms cycle time
 
+    // 1. Read TI/CI sensors and process column detection (affects drive motor decisions)
+    String combo = ReadSensorCombo();
+    ProcessColumnDetection(combo);
+    HandleColumnDecisions();
+
+    // 2. Update drive motor state machine
+    if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
+      add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
+      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: " + 
+                String(column_detected_in_sweep));
+      ImplementDriveMotorState();
+    }
+
+    // 3. Update diverter state machine
     global_error_status = error_front_servo | error_rear_servo | drive_motor_error_status;
     
     DiverterStateChangeOptions stateChange = UpdateDiverterState();
     
     if (stateChange == DIVERTER_STATE_CHANGED) {
-      Serial.print("\n[STATE] ");
+      Serial.print("\n[DIVERTER STATE] ");
       Serial.print(DiverterStateToString(diverter_previous_state));
       Serial.print(" → ");
       Serial.println(DiverterStateToString(diverter_current_state));
@@ -1800,28 +1952,41 @@ void SENSOR_READING_TASK(void* pvParameters) {
       
       ImplementDiverterState();
     } else if (stateChange == DIVERTER_UNEXPECTED_CONDITION) {
-      Serial.println("✗ UNEXPECTED STATE CONDITION!");
-    }
-
-    // Read TI/CI sensors and process column detection
-    String combo = ReadSensorCombo();
-    ProcessColumnDetection(combo);
-    HandleColumnDecisions();
-
-    if (UpdateDriveMotorState() == DRIVE_MOTOR_STATE_CHANGED) {
-      add_log("State changed to: " + String(drive_motor_current_state) + " from " + String(drive_motor_previous_state));
-      add_log("All shared variables - Traffic_Permission: " + String(traffic_permission) + ", Global_Error_Permission: " + String(global_error_permission) + ", Current_Assignment: " + String(current_assignment) + ", Permitted_Edge_Speed: " + String(permitted_edge_speed) + ", column_detected_in_sweep: " + 
-                String(column_detected_in_sweep));
-      ImplementDriveMotorState();
+      Serial.println("✗ UNEXPECTED DIVERTER STATE CONDITION!");
     }
   }
 }
 
+// Task 2: Actuation Control (Core 1, Priority 4)
+// Handles all hardware actuation: drive motor first, then servos
 void ACTUATION_TASK(void* pvParameters) {
   static bool prev_enable_torque_flag = false;
   
   while (true) {
     vTaskDelay(10 / portTICK_PERIOD_MS);  // 10ms cycle time
+    
+    // === DRIVE MOTOR ACTUATION (Priority 1) ===
+    
+    // Update motor speed if changed
+    if (drive_motor_set_speed != drive_motor_previous_set_speed) {
+      CANStatus success = setTargetVelocity(drive_motor_set_speed);
+      if (success == CAN_OK) {
+        int32_t getSetVelocity;
+        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
+          if (getSetVelocity == drive_motor_set_speed) {
+            drive_motor_previous_set_speed = drive_motor_set_speed;
+          }
+        }
+      }
+    }
+
+    // Monitor drive motor current speed
+    int32_t current_velocity;
+    if (getVelocityActualValueAveraged(&current_velocity) == CAN_OK) {
+      drive_motor_current_speed = current_velocity;
+    }
+    
+    // === DIVERTER SERVO ACTUATION (Priority 2) ===
     
     // Handle torque enable/disable
     if (enable_torque_flag != prev_enable_torque_flag) {
@@ -1837,6 +2002,9 @@ void ACTUATION_TASK(void* pvParameters) {
           add_log("✗ Rear torque disable failed");
           error_rear_servo = true;
         }
+        // Reset commanded position tracking when torque disabled
+        last_commanded_front_position = -1;
+        last_commanded_rear_position = -1;
       } else {
         // Enable torque
         delay(1);
@@ -1854,41 +2022,59 @@ void ACTUATION_TASK(void* pvParameters) {
     }
     
     // Send position commands if torque enabled and targets set
-    if (enable_torque_flag && front_target_position != -1 && rear_target_position != -1) {
-      // Front servo movement
-      if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
-        if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
-          delay(1);
-          if (!setPositionFront(front_target_position, 100, 0)) {
-            add_log("✗ Front position write failed");
-            error_front_servo = true;
+    if (enable_torque_flag && front_diverter_set_position != -1 && rear_diverter_set_position != -1) {
+      // Front servo movement - send command if: (1) target changed, OR (2) position error exceeds tolerance
+      bool front_target_changed = (front_diverter_set_position != last_commanded_front_position);
+      bool front_position_error = abs(front_diverter_current_position - front_diverter_set_position) > front_diverter_tolerance;
+      
+      if (front_target_changed || front_position_error) {
+        if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
+          if (front_diverter_current_position < (front_diverter_right_thresold - front_diverter_tolerance)) {
+            delay(1);
+            if (!setPositionFront(front_diverter_set_position, 100, 0)) {
+              add_log("✗ Front position write failed");
+              error_front_servo = true;
+            } else {
+              last_commanded_front_position = front_diverter_set_position;
+            }
           }
-        }
-      } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
-        if (front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
-          delay(1);
-          if (!setPositionFront(front_target_position, 100, 0)) {
-            add_log("✗ Front position write failed");
-            error_front_servo = true;
+        } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
+          if (front_diverter_current_position > (front_diverter_left_thresold + front_diverter_tolerance)) {
+            delay(1);
+            if (!setPositionFront(front_diverter_set_position, 100, 0)) {
+              add_log("✗ Front position write failed");
+              error_front_servo = true;
+            } else {
+              last_commanded_front_position = front_diverter_set_position;
+            }
           }
         }
       }
       
-      // Rear servo movement
-      if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
-        if (rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
-          delay(1);
-          if (!setPositionRear(rear_target_position, 100, 0)) {
-            add_log("✗ Rear position write failed");
-            error_rear_servo = true;
+      // Rear servo movement - send command if: (1) target changed, OR (2) position error exceeds tolerance
+      bool rear_target_changed = (rear_diverter_set_position != last_commanded_rear_position);
+      bool rear_position_error = abs(rear_diverter_current_position - rear_diverter_set_position) > rear_diverter_tolerance;
+      
+      if (rear_target_changed || rear_position_error) {
+        if (diverter_demand_direction == DIVERTER_DIRECTION_RIGHT) {
+          if (rear_diverter_current_position > (rear_diverter_right_thresold + rear_diverter_tolerance)) {
+            delay(1);
+            if (!setPositionRear(rear_diverter_set_position, 100, 0)) {
+              add_log("✗ Rear position write failed");
+              error_rear_servo = true;
+            } else {
+              last_commanded_rear_position = rear_diverter_set_position;
+            }
           }
-        }
-      } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
-        if (rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
-          delay(1);
-          if (!setPositionRear(rear_target_position, 100, 0)) {
-            add_log("✗ Rear position write failed");
-            error_rear_servo = true;
+        } else if (diverter_demand_direction == DIVERTER_DIRECTION_LEFT) {
+          if (rear_diverter_current_position < (rear_diverter_left_thresold - rear_diverter_tolerance)) {
+            delay(1);
+            if (!setPositionRear(rear_diverter_set_position, 100, 0)) {
+              add_log("✗ Rear position write failed");
+              error_rear_servo = true;
+            } else {
+              last_commanded_rear_position = rear_diverter_set_position;
+            }
           }
         }
       }
@@ -1920,32 +2106,14 @@ void ACTUATION_TASK(void* pvParameters) {
       UpdateDiverterPositionHighLevel();
       last_position_read_time = current_time;
     }
-
-    // Update motor speed if changed
-    if (drive_motor_set_speed != drive_motor_previous_set_speed) {
-      CANStatus success = setTargetVelocity(drive_motor_set_speed);
-      if (success == CAN_OK) {
-        int32_t getSetVelocity;
-        if (getTargetVelocity(&getSetVelocity) == CAN_OK) {
-          if (getSetVelocity == drive_motor_set_speed) {
-            drive_motor_previous_set_speed = drive_motor_set_speed;
-          }
-        }
-      }
-    }
-
-    // Monitor drive motor current speed
-    int32_t current_velocity;
-    if (getVelocityActualValueAveraged(&current_velocity) == CAN_OK) {
-      drive_motor_current_speed = current_velocity;
-    }
   }
 }
 
-// ============================================================================
-// SETUP AND MAIN LOOP
-// ============================================================================
+//=============================================================================
+// CONFIGURATION AND SETUP FUNCTIONS
+//=============================================================================
 
+// Load diverter servo configuration from NVM (Preferences)
 void LoadDiverterConfig() {
   if (!prefs.begin("diverter", true)) {
     Serial.println("✗ NVM failed - using defaults");
@@ -1971,10 +2139,10 @@ void LoadDiverterConfig() {
 }
 
 //=============================================================================
-// HEALTH MONITORING FUNCTIONS
+// COLUMN DETECTION HEALTH MONITORING
 //=============================================================================
 
-// Calculate health status based on majority frame count
+// Calculate health status based on majority frame count against threshold
 HealthStatus CalculateMajorityHealth(int majorityCount, int threshold) {
   if (threshold == 0) return SAFE;
   
@@ -2077,35 +2245,20 @@ HealthStatus AnalyzeWTMColumnHealth() {
 }
 
 //=============================================================================
-// UTILITY AND SETUP FUNCTIONS
+// UTILITY AND HELPER FUNCTIONS
 //=============================================================================
 
-void printFileName() {
-  Serial.println(__FILE__);
-}
-
-// Function to make ahardware beep for 250 ms
-void Beep() {
-  digitalWrite(BUZZER, HIGH);
-  // mcp.digitalWrite(PANEL_LED_PIN, HIGH);
-  delay(250);
-  digitalWrite(BUZZER, LOW);
-  // mcp.digitalWrite(PANEL_LED_PIN, LOW);
-}
-
-// Logger Function which will run as RTOS task
+// Task 3: HTTP Debug Logger (Core 0, Priority 2)
+// Sends accumulated logs to remote server via WiFi
 void HTTP_DEBUG_LOGGER(void* pvParameters) {
   while (true) {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
     if (debugLoggingString != BOT_ID + " " + CODE_ID + ": ") {
-      // Serial.println("Sending logs!");
-      // Serial.println(String(WiFi.status()));
       int httpCode = -1;
       if (loggerFlag) {
         String loggerUrl = HTTP_DEBUG_SERVER_URL + "?entity=" + ENTITY_TYPE + "&entity_id=" + BOT_ID;
         httpDebugger.begin(loggerUrl);
         httpCode = httpDebugger.POST(debugLoggingString);
-        // Serial.println("Response: " + httpDebugger.getString());
       } else {
         httpCode = HTTP_CODE_OK;
       }
@@ -2116,20 +2269,29 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
   }
 }
 
-// Function to add logs into the log string (thread-safe)
-void add_log(String log) {
-//   Serial.println(log);  // Also print to serial for real-time debugging
-  if (xDebugLogMutex != NULL) {
-    if (xSemaphoreTake(xDebugLogMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-      debugLoggingString += " | " + log;
-      xSemaphoreGive(xDebugLogMutex);
-    }
-  } else {
-    debugLoggingString += " | " + log;
-  }
+//=============================================================================
+// UTILITY AND HELPER FUNCTIONS
+//=============================================================================
+
+void printFileName() {
+  Serial.println(__FILE__);
 }
 
-// Function to connect controller to network
+// Generate audible beep for 250ms (used for startup and status indication)
+void Beep() {
+  digitalWrite(BUZZER, HIGH);
+  delay(250);
+  digitalWrite(BUZZER, LOW);
+}
+
+// Configure GPIO pins for sensors and buzzer
+void PinConfig() {
+  pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);
+  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);
+  pinMode(BUZZER, OUTPUT);
+}
+
+// Connect to WiFi network for HTTP logging
 void WiFiConfig() {
   add_log("WiFi connecting...");
   WiFi.begin(SSID, PASSWORD);
@@ -2141,38 +2303,47 @@ void WiFiConfig() {
   Serial.println("Connected to WiFi!");
 }
 
-// Setup the pin configuration
-void PinConfig() {
-  pinMode(COLUMN_INDICATOR_SENSOR, INPUT_PULLUP);       // Traffic indicator pin config
-  pinMode(TRAFFIC_INDICATOR_SENSOR, INPUT_PULLUP);      // Column indicator pin config
-  pinMode(BUZZER, OUTPUT);
-}
-
+//=============================================================================
+// MAIN SETUP FUNCTION
+// Initialization sequence critical for proper operation - DO NOT REORDER
+//=============================================================================
 void setup() {
+  // 1. Initialize Serial for debugging (FIRST)
   Serial.begin(115200);
-  Serial2.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN);
-
-  // Initialize mutex for cross-core logging (Core 0 HTTP logger + Core 1 tasks)
-  xDebugLogMutex = xSemaphoreCreateMutex();
+  delay(500);  // Short delay for hardware stabilization
   
-  if (xDebugLogMutex == NULL) {
-    Serial.println("✗ FATAL: Failed to create debug log mutex");
-    while(1) delay(1000);
-  }
-  
-  // Configure GPIO pins
-  PinConfig();
-  
-  delay(1000);
   Serial.println("\n╔════════════════════════════════════════╗");
   Serial.println("║  Library-less Diverter State Machine   ║");
   Serial.println("║            " FIRMWARE_VERSION "                         ║");
   Serial.println("╚════════════════════════════════════════╝\n");
   
+  // 2. Initialize mutex for thread-safe logging (BEFORE any add_log() calls)
+  xDebugLogMutex = xSemaphoreCreateMutex();
+  if (xDebugLogMutex == NULL) {
+    Serial.println("✗ FATAL: Failed to create debug log mutex");
+    while(1) delay(1000);
+  }
+  Serial.println("✓ Debug log mutex created");
+  
+  // 3. Load NVM configuration (BEFORE using BOT_ID or servo limits)
   LoadDiverterConfig();
+  Serial.println("✓ NVM config loaded");
+  
+  // 4. Initialize debug string (AFTER loading BOT_ID from NVM)
+  debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
+  add_log("System startup");
+  
+  // 5. Connect to WiFi (uses add_log, needs mutex and BOT_ID)
+  WiFiConfig();
+  
+  // 6. Configure GPIO pins
+  PinConfig();
+  Serial.println("✓ GPIO pins configured");
+  
+  // 7. Beep to indicate initialization started
   Beep();
-
-  // Motor power-up delay
+  
+  // 8. Motor power-up delay (BEFORE CAN/Motor init)
   Serial.println("⏳ Waiting for motor/driver power-up...");
   Serial.print("   ");
   for (int i = 5; i > 0; i--) {
@@ -2182,7 +2353,12 @@ void setup() {
   }
   Serial.println("Ready!\n");
   
-  // Initialize CAN
+  // 9. Initialize Serial2 for servos (AFTER power delay)
+  Serial2.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN);
+  delay(100);  // Allow UART to stabilize
+  Serial.println("✓ Serial2 initialized for servos");
+  
+  // 10. Initialize CAN
   Serial.println("→ Initializing CAN (500 kbit/s)...");
   add_log("→ CAN init");
   if (!CAN_Init()) {
@@ -2193,7 +2369,7 @@ void setup() {
   add_log("✓ CAN initialized");
   Serial.println("✓ CAN initialized (TX: GPIO 14, RX: GPIO 15)\n");
   
-  // Configure motor
+  // 11. Configure motor
   if (!MotorConfig()) {
     add_log("✗ FATAL: Motor config failed");
     Serial.println("\n✗ FATAL: Motor configuration failed");
@@ -2201,23 +2377,18 @@ void setup() {
     while (1) delay(1000);
   }
   
-  // Connect to WiFi
-  WiFiConfig();
-  
-  // Initialize debug string
-  debugLoggingString = BOT_ID + " " + CODE_ID + ": ";
-  
-  // Set initial motor speed
+  // 12. Set initial motor speed
   drive_motor_set_speed = S0_5;  // Initial speed set to 0.5 m/s
   
-  // System ready
+  // 13. System ready
   Beep();
   add_log("Bot:" + String(BOT_ID) + " Code:" + CODE_ID);
   Serial.println("Bot: " + String(BOT_ID) + " Code: " + CODE_ID);
   printFileName();
   add_log("Starting the bot!");
   
-  // Create HTTP debug logger task on Core 0
+  // 14. Create RTOS Tasks
+  // HTTP debug logger task on Core 0 (Priority 2)
   xTaskCreatePinnedToCore(
     HTTP_DEBUG_LOGGER,
     "debug_logging",
@@ -2227,7 +2398,7 @@ void setup() {
     &httpDebugLog,
     0);
   
-  // Create sensor reading task on Core 1
+  // Sensor reading and state machine task on Core 1 (Priority 5)
   xTaskCreatePinnedToCore(
     SENSOR_READING_TASK,
     "sensor_reading_task",
@@ -2239,7 +2410,7 @@ void setup() {
   
   vTaskDelay(pdMS_TO_TICKS(20));
   
-  // Create actuation task on Core 1
+  // Actuation control task on Core 1 (Priority 4)
   xTaskCreatePinnedToCore(
     ACTUATION_TASK,
     "actuation_task",

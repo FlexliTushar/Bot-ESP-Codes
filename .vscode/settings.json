@@ -5,6 +5,7 @@
         "print": "cpp",
         "string": "cpp",
         "string_view": "cpp",
-        "__locale": "cpp"
+        "__locale": "cpp",
+        "complex": "cpp"
     }
 }
