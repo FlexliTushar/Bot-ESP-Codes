@@ -284,7 +284,7 @@ unordered_map<string, int> STATION_ID_TO_SPEED_MAP = {
   { "D1", S1 }, { "D2", S2 }, { "D3", S2 }, { "D4", S2 }, { "D5", S2 }, { "D6", S2 }, 
   { "D7", S2 }, { "D9", S2 }, { "D10", S2 }, { "D11", S2 }, { "D12", S2 }, { "D13", S2 }, 
   { "D14", S2 }, { "D15", S2 }, { "D16", S2 }, { "D17", S2 }, { "D18", S2 }, 
-  { "I1", S0_3 }, { "I11", S1 }, { "I12", S1 }
+  { "I1", S0_3 }, { "I11", S1 }, { "I12", S0_05 }
 };
 
 //=============================================================================
@@ -379,7 +379,7 @@ int frameCount11 = 0;
 
 // Confirmation variables
 int exitConfirmationCount = 0;  // Count of consecutive 00 samples
-const int EXIT_CONFIRMATION_THRESHOLD = 5;  // Need 5 consecutive 00s to confirm exit (relaxed from 10)
+const int EXIT_CONFIRMATION_THRESHOLD = 3;  // Need 5 consecutive 00s to confirm exit (relaxed from 10)
 
 // Column tracking
 String detectedColumnCode = "";  // The actual column code (01, 10, or 11)
@@ -393,7 +393,7 @@ const float MINORITY_SAFE_THRESHOLD = 20.0;      // < 20% is safe
 const float MINORITY_WARNING_THRESHOLD = 40.0;   // 20-40% is warning, > 40% is critical
 const int DEFAULT_COLUMN_FRAME_THRESHOLD = 5;    // Conservative threshold for column width
 const int MIN_COLUMN_FRAMES_THRESHOLD = 3;       // Minimum frames to consider valid column (filter noise)
-const int DEFAULT_EMPTY_SPACE_THRESHOLD = 20;    // Expected minimum frames for empty space (relaxed from 30)
+const int DEFAULT_EMPTY_SPACE_THRESHOLD = 10;    // Expected minimum frames for empty space (relaxed from 30)
 const float EMPTY_SPACE_NOISE_THRESHOLD = 5.0;   // < 5% non-00 readings is safe for empty space
 
 HealthStatus majorityHealthWTM = SAFE;
@@ -431,17 +431,21 @@ bool get_destination_api_flag = false;
 bool clear_infeed_api_flag = false;
 bool start_infeed_api_column_counter = false;
 int infeed_api_column_counter = 0;
-String previous_combo_for_infeed_api = "00";
+bool previous_detection_for_infeed_api = 0;
 bool update_parcel_dropped_in_the_dump_api_flag = false;
 bool update_parcel_dropped_api_flag = false;
 
 bool start_column_counter = false;
 int column_counter = 0;
-String previous_combo = "00";
+bool previous_detection = 0;
 
 TaskHandle_t api_task;
 const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
 HTTPClient _http;
+
+// Add these variables at the top of your file with other global variables
+int consecutive_detections = 0;
+const int REQUIRED_CONSECUTIVE_DETECTIONS = 5;
 
 // =============================================================================
 // GLOBAL VARIABLES - FLAP CONTROL
@@ -1476,23 +1480,29 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
       }
     }
     
-    if (combo == "11") {
-      if (previous_combo == "00") {
-        if (start_column_counter) {
-          column_counter++;
-          if(column_counter >= 3) {
-            add_log("Actual speed changed after 3 columns");
-            permitted_edge_speed = S1;
-            // add_log("SET SPEED UPDATE TO: " + String(setSpeed) + " BCZ IT WILL START FROM INFEED STOP POINT");
-            beep_flag = true;
-            start_column_counter = false;
-            column_counter = 0;
-            start_infeed_api_column_counter = true;
+    if (columnDetected) {
+      consecutive_detections++;
+      
+      if (consecutive_detections >= REQUIRED_CONSECUTIVE_DETECTIONS) {
+        if (!previous_detection) {
+          if (start_column_counter) {
+            column_counter++;
+            if(column_counter >= 3) {
+              add_log("Actual speed changed after 3 columns");
+              permitted_edge_speed = S1;
+              beep_flag = true;
+              start_column_counter = false;
+              column_counter = 0;
+              start_infeed_api_column_counter = true;
+            }
           }
+          previous_detection = true;
         }
       }
+    } else {
+      consecutive_detections = 0;
+      previous_detection = false;
     }
-    if (combo == "00") previous_combo = combo;
     // -------------------------------------------------------------------------------------------------------------------------------------------
 
     // ----------------------------------------------------------- Destination Controller --------------------------------------------------------
@@ -1506,8 +1516,8 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
       }
     }
     
-    if (combo == "11") {
-      if(previous_combo_for_infeed_api == "00") {
+    if (columnDetected) {
+      if(!previous_detection_for_infeed_api) {
         if (start_infeed_api_column_counter) {
           if (drive_motor_current_direction == DRIVE_MOTOR_FORWARD) {
             infeed_api_column_counter++;
@@ -1523,7 +1533,7 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
         }
       }
     }
-    if (combo == "00") previous_combo_for_infeed_api = combo;
+    previous_detection_for_infeed_api = columnDetected;
     // -------------------------------------------------------------------------------------------------------------------------------------------
 
     // --------------------------------------------------------------- AFC Controller ------------------------------------------------------------
@@ -1864,8 +1874,11 @@ void setup() {
   PinConfig();
   Serial.println("✓ GPIO pins configured");
   
-  // 7. Beep to indicate initialization started (if buzzer available)
+  // 7a. Beep to indicate initialization started (if buzzer available)
   Beep();
+
+  // 7b.
+  CloseFlap();
   
   // 8. Motor power-up delay (BEFORE CAN/Motor init)
   Serial.println("⏳ Waiting for motor/driver power-up...");

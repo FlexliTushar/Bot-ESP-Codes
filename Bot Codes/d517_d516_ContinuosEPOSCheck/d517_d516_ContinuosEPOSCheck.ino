@@ -77,7 +77,7 @@ using namespace std;
 const String CODE_ID = "d517";
 const char* SSID = "Server_PC";
 const char* PASSWORD = "msort@flexli";
-const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/data";
+const String HTTP_DEBUG_SERVER_URL = "http://192.168.2.109:5000/log";
 const int THRESHOLD_INTENSITY = 250;
 const static int SR_D1 = 36;  // ESP32 pin attached to Photo diode 1
 const static int SR_D2 = 39;  // ESP32 pin attached to Photo diode 2
@@ -843,7 +843,7 @@ void setup() {
     "api_task",
     4096,
     NULL,
-    1,
+    2,
     &apiTask,
     0);
   CANConfig();
@@ -993,6 +993,7 @@ void SENSOR_READING_TASK(void* pvParameters) {
         if (startInfeedAPIColumnCounter) {
           infeedAPIcolumnCounter++;
           if(infeedAPIcolumnCounter >= 10) {
+            add_log("Turning API flag: TRUE");
             getDestinationAPIFlag = true;
             infeedAPIcolumnCounter = 0;
             startInfeedAPIColumnCounter = false;
@@ -1165,7 +1166,8 @@ void HTTP_DEBUG_LOGGER(void* pvParameters) {
       // Serial.println(String(WiFi.status()));
       int httpCode = -1;
       if (loggerFlag) {
-        httpDebugger.begin(HTTP_DEBUG_SERVER_URL);
+        String loggerUrl = HTTP_DEBUG_SERVER_URL + "?entity=bot&entity_id=" + BOT_ID;
+        httpDebugger.begin(loggerUrl);
         httpCode = httpDebugger.POST(debugLoggingString);
         // Serial.println("Response: " + httpDebugger.getString());
       } else {
@@ -1273,7 +1275,7 @@ void GetDestinationAndJourneyPath() {
   String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=MyntraSingleScan&retries=0&sectionId=S1";
   int httpCode = 0;
   _http.begin(url);
-  add_log("API call!");
+  add_log("Get destination API call!");
   httpCode = _http.GET();
   String response = "";
   if (httpCode == HTTP_CODE_OK) {
@@ -1295,7 +1297,7 @@ void UpdateParcelDropped() {
   String url = DMS_URL_PREFIX + "UpdateSuccessfulDropForBot?botId=" + BOT_ID;
   int httpCode = 0;
   _http.begin(url);
-  add_log("Update API call!");
+  add_log("Update successful drop API call!");
   httpCode = _http.PUT(url);
   String response = "";
   if (httpCode == HTTP_CODE_OK) {
@@ -1310,7 +1312,7 @@ void UpdateParcelDroppedInTheDump() {
   String url = DMS_URL_PREFIX + "UpdateDumpDropForBot?botId=" + BOT_ID;
   int httpCode = 0;
   _http.begin(url);
-  add_log("API call!");
+  add_log("Update dump drop API call!");
   httpCode = _http.PUT(url);
   String response = "";
   if (httpCode == HTTP_CODE_OK) {
