@@ -1311,18 +1311,17 @@ void HandleColumnDecisions() {
       column_detected_in_sweep = true;
     }
     if (lastCompletedColumnCode == "11") {
-      add_log("Traffic Detected");
+      // add_log("Traffic Detected");
       traffic_permission = false;
     } else if (lastCompletedColumnCode == "01") {
-      add_log("Traffic Not Detected");
+      // add_log("Traffic Not Detected");
       traffic_permission = true;
     } else if (lastCompletedColumnCode == "10") {
-      add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
+      // add_log("WARNING: Column Indicator malfunction detected! Reading '10' (CI=0, TI=1)");
     }
     
     if (lastCompletedColumnHealth == CRITICAL) {
       // Column health is critical - may need maintenance
-      // add_log("WARNING: Column health is CRITICAL!");
     }
     
     columnJustCompleted = false;
@@ -2071,7 +2070,7 @@ HealthStatus AnalyzeWTMColumnHealth() {
   overallHealthWTM = GetWorstHealth(majorityHealthWTM, minorityHealthWTM);
   
   // Compact log for memory efficiency
-  if (overallHealthWTM == CRITICAL) add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
+  // add_log("C" + String(totalColumnsDetected) + "[" + detectedColumnCode + "]:" + String(totalFramesBetweenSpaces) + "f(" + String(frameCount01) + "," + String(frameCount10) + "," + String(frameCount11) + ") " + HealthToString(overallHealthWTM));
   return overallHealthWTM;
 }
 
