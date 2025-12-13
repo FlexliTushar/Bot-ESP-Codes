@@ -1,7 +1,7 @@
-#define FIRMWARE_ID                     "v1.1.0"
-// v1.0.1-bot-primary.ino
-// Primary bot firmware - Version 1.0.1
-// Over v1.0.0 layer, added WTM functionality and API calls for destination and parcel drop updates
+#define FIRMWARE_ID                     "v1.2.0"
+// v1.2.0-bot-primary.ino
+// Primary bot firmware - Version 1.2.0
+// Over v1.1.0 layer, added optimised infeed stopping logic
 
 #include "driver/twai.h"
 #include "driver/gpio.h"
@@ -1499,8 +1499,8 @@ void READING_SENSOR_AND_UPDATE_STATE_TASK(void* pvParameters) {
         if (!previous_detection) {
           if (start_column_counter) {
             column_counter++;
-            if(column_counter >= 3) {
-              add_log("Actual speed changed after 3 columns");
+            if(column_counter >= 1 && traffic_permission && wtm_column_state == WTM_BETWEEN_COLUMNS) {
+              add_log("Actual speed changed to 1 m/s at infeed");
               permitted_edge_speed = S1;
               beep_flag = true;
               start_column_counter = false;
