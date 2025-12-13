@@ -1,4 +1,4 @@
-#define FIRMWARE_ID                     "v1.0.1"
+#define FIRMWARE_ID                     "v1.1.0"
 // v1.0.1-bot-primary.ino
 // Primary bot firmware - Version 1.0.1
 // Over v1.0.0 layer, added WTM functionality and API calls for destination and parcel drop updates
@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include "esp_system.h"
 #include <Adafruit_MCP23X17.h>
+#include <Update.h>
+#include <ArduinoJson.h>
 using namespace std;
 
 //=============================================================================
@@ -422,7 +424,7 @@ int emptySpacesDetectedInSegment = 0;    // Count of 00 zones between stations
 int totalColumnsDetected = 0;
 
 // =============================================================================
-// GLOBAL VARIABLES - DROPPING AND DESTINATION UPDATES
+// GLOBAL VARIABLES - DROPPING AND DESTINATION UPDATES AND FIRMWARE
 // =============================================================================
 
 String previous_station = "X";
@@ -443,9 +445,18 @@ TaskHandle_t api_task;
 const String DMS_URL_PREFIX = "http://192.168.2.109:8443/m-sort/m-sort-distribution-server/";
 HTTPClient _http;
 
+const char* checkVersionEndpoint = "/ota-and-debugger/checkCurrentFirmwareVersion";
+const char* updateFirmwareEndpoint = "/ota-and-debugger/updateDeviceRoleFirmware";
+const char* deviceRole = "bot_primary";
+
 // Add these variables at the top of your file with other global variables
 int consecutive_detections = 0;
 const int REQUIRED_CONSECUTIVE_DETECTIONS = 5;
+
+// Retry configuration
+const int maxRetries = 5;
+const int initialRetryDelay = 5000;  // 5 seconds
+const int maxRetryDelay = 300000;    // 5 minutes
 
 // =============================================================================
 // GLOBAL VARIABLES - FLAP CONTROL
@@ -1356,7 +1367,7 @@ void StageFlap() {
 // ==============================================================================
 
 void GetDestinationAndJourneyPath() {
-  String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=MyntraSingleScan&retries=0&sectionId=S1";
+  String url = DMS_URL_PREFIX + "GetDestinationStationIdForBot?botId=" + BOT_ID + "&infeedStationId=I1&strategyType=LiveClientServerStrategy&retries=0&sectionId=S1";
   int httpCode = 0;
   add_log("Get Destination API call: " + url);
   _http.begin(url);
@@ -1835,6 +1846,165 @@ void API_TASK(void* pvParameters) {
   }
 }
 
+void checkAndUpdateFirmware() {
+  Serial.println("\n--- Checking firmware version ---");
+  
+  // Step 1: Check firmware version with server
+  String firmwareStatus = checkFirmwareVersion();
+  
+  Serial.print("Firmware status: ");
+  Serial.println(firmwareStatus);
+  
+  // Step 2: If update required, download and install
+  if (firmwareStatus == "update-needed") {
+    Serial.println("Update required! Starting download...");
+    
+    bool success = downloadAndInstallFirmware();
+    
+    if (success) {
+      Serial.println("Firmware update successful! Rebooting...");
+      delay(2000);
+      ESP.restart();
+    } else {
+      Serial.println("Firmware update failed. Continuing with current version.");
+    }
+  } else if (firmwareStatus == "up-to-date") {
+    Serial.println("Firmware is up to date. No update needed.");
+  } else if (firmwareStatus == "NO_RELEASE_SET") {
+    Serial.println("No release configured on server. Skipping update.");
+  } else {
+    Serial.println("Unknown status. Skipping update.");
+  }
+}
+
+String checkFirmwareVersion() {
+  HTTPClient http;
+  // ?deviceRole=bot_primary&deviceId=B7&fileName=11
+  // Build URL with query parameters
+  String url = String(DMS_URL_PREFIX) + checkVersionEndpoint + 
+               "?deviceRole=" + deviceRole +
+               "&deviceId=" + BOT_ID + "&fileName=" + FIRMWARE_ID ;
+  
+  Serial.print("Calling: ");
+  Serial.println(url);
+  
+  http.begin(url);
+  http.setTimeout(10000);  // 10 second timeout
+  
+  int httpCode = http.GET();
+  String status = "ERROR";
+  
+  if (httpCode == 200) {
+    String response = http.getString();
+    Serial.print("Response: ");
+    Serial.println(response);
+    
+    // Parse JSON response
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, response);
+    
+    if (error) {
+      Serial.print("JSON parsing failed: ");
+      Serial.println(error.c_str());
+      status = "ERROR";
+    } else {
+      // Extract status attribute from JSON
+      if (doc.containsKey("status")) {
+        status = doc["status"].as<String>();
+      } else {
+        Serial.println("No 'status' field in JSON response");
+        status = "ERROR";
+      }
+    }
+  } else {
+    Serial.print("HTTP Error: ");
+    Serial.println(httpCode);
+    Serial.println(http.getString());
+  }
+  
+  http.end();
+  return status;
+}
+
+bool downloadAndInstallFirmware() {
+  int retryCount = 0;
+  int retryDelay = initialRetryDelay;
+  
+  while (retryCount < maxRetries) {
+    Serial.printf("\n--- Download attempt %d/%d ---\n", retryCount + 1, maxRetries);
+    
+    HTTPClient http;
+    
+    // Build URL
+    String url = String(DMS_URL_PREFIX) + updateFirmwareEndpoint + 
+                 "?deviceId=" + BOT_ID +
+                 "&deviceRole=" + deviceRole;
+    
+    Serial.print("Downloading from: ");
+    Serial.println(url);
+    
+    http.begin(url);
+    http.setTimeout(600000);  // 10 minute timeout for large file
+    
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+      int contentLength = http.getSize();
+      Serial.printf("Firmware size: %d bytes (%.2f MB)\n", contentLength, contentLength / 1048576.0);
+      
+      bool canBegin = Update.begin(contentLength);
+      
+      if (canBegin) {
+        WiFiClient* stream = http.getStreamPtr();
+        
+        size_t written = Update.writeStream(*stream);
+        
+        Serial.printf("Downloaded: %d bytes\n", written);
+        
+        if (written == contentLength) {
+          Serial.println("Download complete!");
+        } else {
+          Serial.printf("Download incomplete: %d / %d bytes\n", written, contentLength);
+        }
+        
+        if (Update.end()) {
+          if (Update.isFinished()) {
+            Serial.println("Update successfully completed!");
+            http.end();
+            return true;
+          } else {
+            Serial.println("Update not finished. Something went wrong!");
+          }
+        } else {
+          Serial.printf("Update error: %d\n", Update.getError());
+        }
+      } else {
+        Serial.println("Not enough space to begin OTA update!");
+      }
+      
+    } else if (httpCode == 429) {
+      // Server throttling - retry after delay
+      Serial.println("Server busy (429). Retrying...");
+      
+    } else {
+      Serial.printf("HTTP Error: %d\n", httpCode);
+    }
+    
+    http.end();
+    
+    // Retry with exponential backoff
+    retryCount++;
+    if (retryCount < maxRetries) {
+      Serial.printf("Retrying in %d seconds...\n", retryDelay / 1000);
+      delay(retryDelay);
+      retryDelay = min(retryDelay * 2, maxRetryDelay);  // Exponential backoff
+    }
+  }
+  
+  Serial.println("Max retries reached. Update failed.");
+  return false;
+}
+
 //=============================================================================
 // MAIN SETUP FUNCTION
 // Initialization sequence critical for proper operation - DO NOT REORDER
@@ -1846,7 +2016,7 @@ void setup() {
   delay(500);  // Short delay for hardware stabilization
   
   Serial.println("\n╔════════════════════════════════════════╗");
-  Serial.println("║   BOT PRIMARY FIRMWARE v1.0.1          ║");
+  Serial.println("║   BOT PRIMARY FIRMWARE v1.1.0          ║");
   Serial.println("╚════════════════════════════════════════╝\n");
   
   // 2. Initialize mutex for thread-safe logging (BEFORE any add_log() calls)
@@ -1917,6 +2087,8 @@ void setup() {
   
   // 12. Set initial motor speed (if applicable)
   drive_motor_set_speed = S0_5;  // Uncomment when variable is available
+
+  checkAndUpdateFirmware();
   
   // 13. System ready
   Beep();  // Uncomment when available
